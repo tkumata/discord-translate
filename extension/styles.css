@@ -1,0 +1,55 @@
+[data-discord-translate] {
+  box-sizing: border-box;
+  margin: 4px 0;
+}
+
+.discord-translate-loading,
+.discord-translate-translation,
+.discord-translate-error {
+  color: var(--text-muted, #949ba4);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+
+.discord-translate-button,
+.discord-translate-loading {
+  background: var(--background-secondary-alt, #4f545c);
+  border: 1px solid var(--background-modifier-accent, #4e5058);
+  border-radius: 3px;
+  color: var(--text-normal, #dbdee1);
+  cursor: pointer;
+  font: inherit;
+  padding: 2px 8px;
+}
+
+.discord-translate-button:hover {
+  background: var(--background-modifier-hover, #4e5058);
+  border-color: var(--interactive-hover, #b5bac1);
+}
+
+.discord-translate-button:focus-visible {
+  outline: 2px solid var(--focus-primary, #00aff4);
+  outline-offset: 2px;
+}
+
+.discord-translate-loading {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.discord-translate-translation {
+  color: var(--text-normal, #dbdee1);
+}
+
+.discord-translate-error {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.discord-translate-error button {
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 2px 7px;
+}
