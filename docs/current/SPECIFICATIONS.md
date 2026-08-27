@@ -117,7 +117,7 @@ system promptは、日本語への自然な翻訳、翻訳結果のみの出力�
 - ONへ変更すると、各Discordタブでbridgeと`MutationObserver`を開始し、現在表示中メッセージを1回走査する。以後の新規メッセージも検出するが、この走査・検出・bridge生成では`chrome.runtime.sendMessage`も翻訳POSTも行わない。
 - 翻訳可能な各メッセージには初期状態として`翻訳`buttonを1つだけ表示する。button押下時だけ、対象本文について1回の`chrome.runtime.sendMessage`を行う。
 - 押下後はbuttonを`翻訳中…`へ切り替えてdisabledにし、同じUI状態からの重複押下と重複message要求を抑止する。
-- 成功時は原文を置換せず、対象content要素の直後に`lang="ja"`の訳文を1つ表示する。
+- 成功時は原文を置換せず、対象content要素の直後に`lang="ja"`の訳文ブロックを1つ表示する。先頭に小さな太字の`日本語訳`ラベルを置き、上余白8px、左の細線、薄い背景、内側余白で原文との境界と訳文の範囲を示す。訳文は通常の本文色と改行を維持し、色はDiscordのテーマ変数に合わせる。
 - 失敗時は原文を残し、`翻訳できませんでした（<固定error code>）`と`再試行`buttonを同じ位置に表示する。表示するcodeはservice workerが返した既存固定値だけとし、本文、response、`error.message`、URLを表示・logしない。自動retryは行わず、`再試行`押下だけが新しいmessage要求を作る。
 - 本文が変わった場合、または対象content要素が差し替えられた場合は、旧本文のloading、訳文、errorを破棄し、新本文用の初期`翻訳`buttonへ戻す。
 - `翻訳`、翻訳中、成功、失敗の表示要素にはExtension固有の`data-discord-translate`属性を付け、本文抽出と再走査の対象外にする。

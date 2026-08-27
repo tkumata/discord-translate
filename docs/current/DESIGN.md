@@ -41,17 +41,17 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 
 ## 3. 責務分割
 
-| コンポーネント              | 所有する責務                                                                                                                                                             | 所有しない責務                                                        | 状態                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------ |
-| Discord content script      | 対象メッセージ検出、各メッセージの手動翻訳 UI、押下・連打抑止・stale 結果破棄、service worker への依頼、ON 中の bridge iframe 1個の lifecycle                            | HTTP、payload、Port job、model                                        | 実装・Node test・実 Chrome 検証済み                    |
-| Extension service worker    | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・最終応答検証、`invalid_response` 診断、重複排除、memory cache、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化                          | Phase 5.6 完了。Node test 合格。実 Chrome 診断確認待ち |
-| Extension document bridge   | 検証済み Port、固定 localhost URL への 120秒 POST、固定 result envelope、HTTP 200 JSON parse失敗時の`invalid_response`診断                                             | page message、任意 URL/payload、queue/cache、最終 API schema、storage | Node test 合格。実 Chrome 診断確認待ち                 |
-| Extension popup             | 全 Discord タブ共通の`enabled` 状態遷移、LNA prompt を trigger する固定 `/health` GET、5秒 timeout、厳密 health 検証、本文なし状態 code 表示                         | Discord DOM、翻訳本文、chat completion、queue/cache                   | 実装済み・Node test 合格・実 Chrome health 成功        |
-| `scripts/start-server.sh` | 起動入力検証、loopback/CORS/offline/concurrency/log 設定、server exec                                                                                                    | HTTP API 再実装、request 内容検証、cache                              | 実装済み                                               |
-| `mlx_lm.server`           | HTTP endpoint、モデルロード、生成処理                                                                                                                                    | Discord UI、製品固有 queue/cache                                      | 依存として利用中                                       |
-| Qwen MLX model              | 翻訳文生成                                                                                                                                                               | 入力経路、権限、ログ方針                                              | Qwen3-8B-4bit を 検証済み                              |
-| `scripts/verify.py`       | 固定非機密ケースで server 契約・CORS・直列性を検証                                                                                                                       | 実 Chrome UI、LAN 別端末、100件 stress                                | 実装済み                                               |
-| launchd LaunchAgent         | login 起動、process lifecycle                                                                                                                                            | 翻訳仕様、Extension UI                                                | 未実装・後続フェーズ                                   |
+| コンポーネント | 所有する責務 | 所有しない責務 | 状態 |
+| ------------ | ---------- | -------------| --- |
+| Discord content script | 対象メッセージ検出、各メッセージの手動翻訳 UI、押下・連打抑止・stale 結果破棄、service worker への依頼、ON 中の bridge iframe 1個の lifecycle | HTTP、payload、Port job、model | 実装・Node test・実 Chrome 検証済み |
+| Extension service worker | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・最終応答検証、`invalid_response` 診断、重複排除、memory cache、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化 | Phase 5.6 完了。Node test 合格。実 Chrome 診断確認待ち |
+| Extension document bridge | 検証済み Port、固定 localhost URL への 120秒 POST、固定 result envelope、HTTP 200 JSON parse失敗時の`invalid_response`診断 | page message、任意 URL/payload、queue/cache、最終 API schema、storage | Node test 合格。実 Chrome 診断確認待ち |
+| Extension popup | 全 Discord タブ共通の`enabled` 状態遷移、LNA prompt を trigger する固定 `/health` GET、5秒 timeout、厳密 health 検証、本文なし状態 code 表示 | Discord DOM、翻訳本文、chat completion、queue/cache | 実装済み・Node test 合格・実 Chrome health 成功 |
+| `scripts/start-server.sh` | 起動入力検証、loopback/CORS/offline/concurrency/log 設定、server exec | HTTP API 再実装、request 内容検証、cache | 実装済み |
+| `mlx_lm.server` | HTTP endpoint、モデルロード、生成処理 | Discord UI、製品固有 queue/cache | 依存として利用中 |
+| Qwen MLX model | 翻訳文生成 | 入力経路、権限、ログ方針 | Qwen3-8B-4bit を 検証済み |
+| `scripts/verify.py` | 固定非機密ケースで server 契約・CORS・直列性を検証 | 実 Chrome UI、LAN 別端末、100件 stress | 実装済み |
+| launchd LaunchAgent | login 起動、process lifecycle | 翻訳仕様、Extension UI | 未実装・後続フェーズ |
 
 ## 4. 依存方向
 
@@ -77,7 +77,7 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 6. bridge が固定 localhost API へ 120 秒 timeout で POST し、固定 envelope を返す。
 7. service worker が job ID、HTTP、schema、thinking、truncation を最終検証する。
 8. content script が container 接続、content node、本文不変を再検証する。
-9. stale でなければ原文を残し、content 直後へ日本語訳だけを表示する。
+9. stale でなければ原文を残し、content 直後へ「日本語訳」ラベル付きの訳文ブロックを表示する。
 
 手順 1〜9 は実装・Node test 済みである。Phase 5.6 で既定 `defaultTranslator` を bridge `requestImpl` へ復旧し、bridge fetch と service worker job 監督を 120 秒へ揃えた。実 Chrome で翻訳、timeout 境界、異常系を検証済みである。
 
@@ -143,6 +143,8 @@ queueとcacheの所有者はservice workerに一意化する。unique jobはrunn
 `enabled`だけを`chrome.storage.local`のsource of truthとする。install時の既定値はfalseで、update時に既存値を上書きしない。OFF→checking→ON/OFFの判断はpopupのpure export可能な状態遷移へ分離し、fetchとStorage APIは境界として注入可能にする。popup、content scriptはStorage API経由で読み、content scriptは`chrome.storage.onChanged`でON/OFFを反映する。本文、訳文、job、cacheはstorageへ保存しない。
 
 メッセージUIの最小状態は`翻訳`、`翻訳中…`、`訳文`、`固定error code + 再試行`である。状態所有者はcontent scriptの対象content nodeごとのrecordとし、`翻訳中…`ではbuttonをdisabledにする。本文変更またはDOM差し替えで旧recordを表示対象から外し、ON中の新本文には新しい`翻訳`を1つ作る。OFFではobserver、bridge、すべての挿入UIとrecordを破棄し、新規要求を作らない。
+
+訳文UIは既存の`data-discord-translate="translation"`と`lang="ja"`を持つ親要素を維持し、その内部に可視の`日本語訳`ラベルと訳文本体を配置する。ラベルと本文は`textContent`で設定し、HTMLとして解釈しない。CSSで上余白8px、左線、薄い背景と内側余白を付け、通常の本文色と改行を維持する。2026-08-27の表示改善について、検証結果は[変更記録](../plans/completed/2026-08-27-translation-boundary.md)を参照する。
 
 ## 7. 外部境界
 

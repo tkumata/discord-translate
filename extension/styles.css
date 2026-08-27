@@ -4,7 +4,6 @@
 }
 
 .discord-translate-loading,
-.discord-translate-translation,
 .discord-translate-error {
   color: var(--text-muted, #949ba4);
   font-size: 0.9em;
@@ -38,7 +37,23 @@
 }
 
 .discord-translate-translation {
+  background: var(--background-secondary, #2b2d31);
+  border-left: 2px solid var(--background-modifier-accent, #4e5058);
   color: var(--text-normal, #dbdee1);
+  font-size: 0.9em;
+  margin-top: 8px;
+  padding: 6px 8px;
+}
+
+.discord-translate-translation-label {
+  display: block;
+  font-size: 0.8em;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.discord-translate-translation-body {
+  white-space: pre-wrap;
 }
 
 .discord-translate-error {

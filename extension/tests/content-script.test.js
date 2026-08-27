@@ -276,15 +276,19 @@ test("one click sends one request and disables the button while pending", async 
 });
 
 test("success keeps the source and renders a Japanese translation directly below it", async () => {
-  const env = await loadContentScript(() => Promise.resolve({ ok: true, text: "こんにちは" }));
+  const env = await loadContentScript(() => Promise.resolve({ ok: true, text: "こんにちは <b>世界</b>\n改行" }));
   const { container, content } = message(env.document, "chat-messages-3-1", "hello");
   env.api.applyEnabled(true);
   ui(container, "button").click();
   await flush();
 
   const translation = ui(container, "translation");
+  const [label, body] = translation.children;
   assert.equal(content.textContent, "hello");
-  assert.equal(translation.textContent, "こんにちは");
+  assert.equal(label.className, "discord-translate-translation-label");
+  assert.equal(label.textContent, "日本語訳");
+  assert.equal(body.className, "discord-translate-translation-body");
+  assert.equal(body.textContent, "こんにちは <b>世界</b>\n改行");
   assert.equal(translation.lang, "ja");
   assert.equal(content.parentNode.children.indexOf(translation), content.parentNode.children.indexOf(content) + 1);
 });
@@ -307,7 +311,7 @@ test("failure shows a fixed code and retry sends the next request", async () => 
   error.children.find((element) => element.tagName === "BUTTON").click();
   await flush();
   assert.equal(env.calls.length, 2);
-  assert.equal(ui(container, "translation").textContent, "再試行成功");
+  assert.equal(ui(container, "translation").children[1].textContent, "再試行成功");
 });
 
 test("OFF removes observer, bridge, and UI without sending a request", async () => {

@@ -137,7 +137,13 @@ function showTranslation(content, record, translation) {
   element.dataset.discordTranslate = "translation";
   element.className = "discord-translate-translation";
   element.lang = "ja";
-  element.textContent = translation;
+  const label = document.createElement("span");
+  label.className = "discord-translate-translation-label";
+  label.textContent = "日本語訳";
+  const body = document.createElement("div");
+  body.className = "discord-translate-translation-body";
+  body.textContent = translation;
+  element.append(label, body);
   content.after(element);
   record.ui = element;
 }
