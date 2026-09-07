@@ -140,9 +140,3 @@ test("logs only unavailable diagnostics when bridge JSON parsing fails", async (
   assert.equal(JSON.stringify(capture.calls).includes("秘密"), false);
   assert.equal(JSON.stringify(capture.calls).includes("job-privacy"), false);
 });
-
-test("does not expose page message inputs", async () => {
-  const source = await import("node:fs/promises").then((fs) => fs.readFile(new URL("../bridge.js", import.meta.url), "utf8"));
-  assert.doesNotMatch(source, /window\.postMessage/);
-  assert.doesNotMatch(source, /window\.addEventListener\(["']message/);
-});

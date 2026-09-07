@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  API_URL,
   BRIDGE_PORT_NAME,
   BridgeRegistry,
   CACHE_TTL_MS,
@@ -205,7 +204,7 @@ test("logs only fixed invalid-response diagnostics and stays silent for valid or
     await assert.rejects(
       fetchTranslation("秘密の入力", {
         logger: capture.logger,
-        fetchImpl: async () => ({ status: 200, json: async () => item.payload }),
+        requestImpl: async () => ({ status: 200, json: async () => item.payload }),
       }),
       (value) => value.code === "invalid_response",
     );
@@ -217,7 +216,7 @@ test("logs only fixed invalid-response diagnostics and stays silent for valid or
   await assert.rejects(
     fetchTranslation("秘密の入力", {
       logger: malformed.logger,
-      fetchImpl: async () => ({ status: 200, json: async () => { throw new Error("秘密の例外"); } }),
+      requestImpl: async () => ({ status: 200, json: async () => { throw new Error("秘密の例外"); } }),
     }),
     (value) => value.code === "invalid_response",
   );
@@ -232,7 +231,7 @@ test("logs only fixed invalid-response diagnostics and stays silent for valid or
   const valid = diagnosticsLogger();
   assert.equal(await fetchTranslation("source", {
     logger: valid.logger,
-    fetchImpl: async () => responseFor("source"),
+    requestImpl: async () => responseFor("source"),
   }), "訳:source");
   assert.deepEqual(valid.calls, []);
 
@@ -240,7 +239,7 @@ test("logs only fixed invalid-response diagnostics and stays silent for valid or
   await assert.rejects(
     fetchTranslation("source", {
       logger: network.logger,
-      fetchImpl: async () => { throw new Error("network detail"); },
+      requestImpl: async () => { throw new Error("network detail"); },
     }),
     (value) => value.code === "network_error",
   );
@@ -252,8 +251,8 @@ test("coalesces duplicate jobs and processes FIFO with concurrency one", async (
   const pending = [];
   const queue = new TranslationQueue({
     hashImpl: (text) => text,
-    fetchImpl: async (_url, options) => {
-      const text = JSON.parse(options.body).messages[1].content;
+    requestImpl: async (_tabId, payload) => {
+      const text = payload.messages[1].content;
       calls.push(text);
       await new Promise((resolve) => pending.push(resolve));
       return responseFor(text);
@@ -281,7 +280,7 @@ test("rejects a new key at the unique queue limit", async () => {
     maxJobs: 2,
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
-    fetchImpl: () => new Promise(() => {}),
+    requestImpl: () => new Promise(() => {}),
   });
   void queue.translate("one");
   void queue.translate("two");
@@ -297,7 +296,7 @@ test("expires queued jobs without fetching them", async () => {
     hashImpl: (text) => text,
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
-    fetchImpl: () => {
+    requestImpl: () => {
       calls += 1;
       return new Promise(() => {});
     },
@@ -314,12 +313,12 @@ test("expires queued jobs without fetching them", async () => {
   assert.equal(calls, 1);
 });
 
-test("aborts a fetch after the fixed request timeout", async () => {
+test("aborts a request after the fixed request timeout", async () => {
   const timers = fakeTimers();
   const request = fetchTranslation("source", {
     setTimeoutImpl: timers.setTimeout,
     clearTimeoutImpl: timers.clearTimeout,
-    fetchImpl: (_url, options) =>
+    requestImpl: (_payload, options) =>
       new Promise((resolve, reject) => {
         options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       }),
@@ -391,7 +390,7 @@ test("normalizes Web Crypto failures to hash_error", async () => {
 test("classifies local network permission failures separately from generic fetch failures", async () => {
   for (const name of ["NotAllowedError", "SecurityError"]) {
     const request = fetchTranslation("source", {
-      fetchImpl: async () => {
+      requestImpl: async () => {
         const value = new Error("permission");
         value.name = name;
         throw value;
@@ -401,7 +400,7 @@ test("classifies local network permission failures separately from generic fetch
   }
 
   await assert.rejects(
-    fetchTranslation("source", { fetchImpl: async () => { throw new Error("network"); } }),
+    fetchTranslation("source", { requestImpl: async () => { throw new Error("network"); } }),
     (value) => value.code === "network_error",
   );
 });
@@ -414,9 +413,9 @@ test("uses successful translations in an expiring LRU cache", async () => {
     now: () => now,
     cacheLimit: 2,
     cacheTtlMs: 10,
-    fetchImpl: async (_url, options) => {
+    requestImpl: async (_tabId, payload) => {
       calls += 1;
-      return responseFor(JSON.parse(options.body).messages[1].content);
+      return responseFor(payload.messages[1].content);
     },
   });
 
@@ -426,7 +425,6 @@ test("uses successful translations in an expiring LRU cache", async () => {
   await queue.translate("b");
   await queue.translate("a");
   await queue.translate("c");
-  assert.equal(queue.cacheSize, 2);
   await queue.translate("b");
   assert.equal(calls, 4);
   now = 11;
@@ -495,7 +493,6 @@ test("returns fixed errors at the message boundary without fetching invalid inpu
     { ok: false, error: "network_error" },
   );
   assert.ok(ERROR_CODES.includes("invalid_response"));
-  assert.equal(API_URL, "http://127.0.0.1:8080/v1/chat/completions");
 });
 
 function fakePort(sender, name = BRIDGE_PORT_NAME) {

@@ -25,32 +25,15 @@ function exactKeys(value, expected) {
   return isPlainObject(value) && Object.keys(value).sort().join(",") === expected.slice().sort().join(",");
 }
 
-export function responseDiagnostics(payload) {
-  const choice = isPlainObject(payload) && Array.isArray(payload.choices)
-    ? payload.choices[0]
-    : null;
-  const message = isPlainObject(choice) && isPlainObject(choice.message) ? choice.message : null;
-  const content = message && typeof message.content === "string" ? message.content : null;
-  return {
-    finish_reason: isPlainObject(choice) && typeof choice.finish_reason === "string"
-      ? choice.finish_reason
-      : null,
-    content_present: content !== null,
-    reasoning_present: [payload, choice, message].some(
-      (value) => isPlainObject(value) && ["reasoning", "reasoning_content"].some((field) =>
-        Object.prototype.hasOwnProperty.call(value, field),
-      ),
-    ) || (content !== null && /<\/?think>/i.test(content)),
-    usage_total_tokens_present: isPlainObject(payload?.usage) &&
-      Number.isInteger(payload.usage.total_tokens) &&
-      payload.usage.total_tokens >= 0,
-  };
-}
-
-function logInvalidResponse(logger, payload) {
+function logInvalidResponse(logger) {
   if (typeof logger?.warn !== "function") return;
   try {
-    logger.warn("invalid_response", responseDiagnostics(payload));
+    logger.warn("invalid_response", {
+      finish_reason: null,
+      content_present: false,
+      reasoning_present: false,
+      usage_total_tokens_present: false,
+    });
   } catch {
     // Diagnostics must not change the existing bridge result.
   }
@@ -147,7 +130,7 @@ export async function handleBridgeRequest(
       try {
         payload = await response.json();
       } catch {
-        logInvalidResponse(logger, null);
+        logInvalidResponse(logger);
         sendError(port, message.jobId, "invalid_response");
         return;
       }

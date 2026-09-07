@@ -1,4 +1,3 @@
-export const API_URL = "http://127.0.0.1:8080/v1/chat/completions";
 export const FETCH_TIMEOUT_MS = 120_000;
 export const QUEUE_WAIT_TIMEOUT_MS = 120_000;
 export const MAX_UNIQUE_JOBS = 64;
@@ -209,8 +208,7 @@ function unrefTimer(timer) {
 export async function fetchTranslation(
   text,
   {
-    fetchImpl = (...args) => globalThis.fetch(...args),
-    requestImpl = null,
+    requestImpl,
     logger = globalThis.console,
     timeoutMs = FETCH_TIMEOUT_MS,
     setTimeoutImpl = (...args) => globalThis.setTimeout(...args),
@@ -227,14 +225,7 @@ export async function fetchTranslation(
 
   try {
     const payload = buildPayload(text);
-    const response = requestImpl
-      ? await requestImpl(payload, { signal: controller.signal })
-      : await fetchImpl(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+    const response = await requestImpl(payload, { signal: controller.signal });
     if (!response || response.status !== 200 || typeof response.json !== "function") {
       throw error("http_error");
     }
@@ -267,8 +258,7 @@ export async function fetchTranslation(
 
 export class TranslationQueue {
   constructor({
-    fetchImpl = (...args) => globalThis.fetch(...args),
-    requestImpl = null,
+    requestImpl,
     logger = globalThis.console,
     hashImpl = sha256Hex,
     now = () => Date.now(),
@@ -280,7 +270,6 @@ export class TranslationQueue {
     cacheLimit = MAX_CACHE_ENTRIES,
     cacheTtlMs = CACHE_TTL_MS,
   } = {}) {
-    this.fetchImpl = fetchImpl;
     this.requestImpl = requestImpl;
     this.logger = logger;
     this.hashImpl = hashImpl;
@@ -298,10 +287,6 @@ export class TranslationQueue {
     this.hashQueue = [];
     this.hashing = false;
     this.running = false;
-  }
-
-  get cacheSize() {
-    return this.cache.size;
   }
 
   translate(text, tabId = null) {
@@ -422,10 +407,7 @@ export class TranslationQueue {
 
   run(job) {
     fetchTranslation(job.text, {
-      fetchImpl: this.fetchImpl,
-      requestImpl: this.requestImpl
-        ? (payload, options) => this.requestImpl(job.tabId, payload, options)
-        : null,
+      requestImpl: (payload, options) => this.requestImpl(job.tabId, payload, options),
       logger: this.logger,
       timeoutMs: this.fetchTimeoutMs,
       setTimeoutImpl: this.setTimeoutImpl,
@@ -433,11 +415,9 @@ export class TranslationQueue {
     }).then(
       (translation) => {
         this.saveCache(job.key, translation);
-        job.state = "succeeded";
         job.resolve(translation);
       },
       (value) => {
-        job.state = "failed";
         job.reject(value instanceof TranslationError ? value : error("network_error"));
       },
     ).finally(() => {
