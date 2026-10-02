@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import codecs
 import io
 import json
 import re
 import sys
 import time
 from dataclasses import dataclass
-from http.client import HTTPResponse
+from http.client import HTTPConnection, HTTPException, HTTPResponse
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -19,11 +20,12 @@ from urllib.request import Request, urlopen
 
 
 SYSTEM_PROMPT = (
-    "You are a translation engine. Translate the user's message into natural "
-    "Japanese. Output only the translation. Preserve Markdown, URLs, usernames, "
-    "channel names, emoji, code, inline code, product names, API names, library "
-    "names, and identifiers where appropriate. Do not explain or repeat the source text."
+    "Translate the user's message into natural Japanese. Output only the translation. "
+    "Preserve Markdown, URLs, usernames, @username, #channel, code blocks, inline code, "
+    "product names, API names, library names, identifiers, and emoji where appropriate. "
+    "Do not explain or repeat the source text."
 )
+
 CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 EXTENSION_ORIGIN = re.compile(r"^chrome-extension://[a-p]{32}$")
 
@@ -68,6 +70,7 @@ def parse_args(arguments: list[str] | None = None) -> argparse.Namespace:
                         help="Chrome extension origin for CORS checks")
     parser.add_argument("--count", type=int, default=20,
                         help="Sequential requests to run")
+    parser.add_argument("--streaming", action="store_true", help="verify SSE and input KV cache reuse")
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument(
@@ -158,6 +161,55 @@ def run_self_check() -> None:
         raise AssertionError(
             "invalid thinking/truncation response was accepted")
 
+    frames = [
+        {"choices": [{"delta": {"role": "assistant"}}]},
+        {"choices": [{"delta": {"content": "日本"}}]},
+        {"choices": [{"delta": {"content": "語🚀"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 2}}},
+    ]
+    def encoded(events, terminal=True):
+        text = ": keepalive\r\n\r\n" + "".join(
+            "data: " + json.dumps(frame, ensure_ascii=False) + "\r\n\r\n" for frame in events)
+        return (text + ("data: [DONE]\r\n\r\n" if terminal else "")).encode("utf-8")
+
+    class FragmentedResponse:
+        def __init__(self, data):
+            self.parts = iter(bytes([byte]) for byte in data)
+            self.reads = 0
+        def read1(self, _size):
+            self.reads += 1
+            return next(self.parts, b"")
+
+    with contextlib.redirect_stdout(io.StringIO()) as output:
+        reader = FragmentedResponse(encoded(frames))
+        data, metadata = parse_stream(reader, started=0, timeout=120, now=lambda: reader.reads / 1000)
+        assert extract_translation(data) == ("日本語🚀", "stop")
+        assert metadata["content_chunks"] == 2 and metadata["cached_tokens"] == 2
+        assert 0 < metadata["first_content_elapsed"] < metadata["elapsed"]
+        multiline = b'data: {"choices":\ndata: [{"delta":{"content":"' + "日本語".encode() + b'"},"finish_reason":"stop"}]}\n\n'
+        multiline += b'data: {"choices":[],"usage":{"total_tokens":2}}\r\rdata: [DONE]\r\r'
+        parsed, _ = parse_stream(io.BytesIO(multiline), started=time.perf_counter(), timeout=120)
+        assert extract_translation(parsed)[0] == "日本語"
+        for events, terminal in [
+            (frames, False), (frames[:-1], True),
+            ([{"choices": [{"delta": {"content": "訳"}, "finish_reason": "length"}]}], True),
+            ([{"choices": [{"delta": {"reasoning": "private"}}]}], True),
+            ([{"choices": [{"delta": {"tool_calls": []}}]}], True),
+            ([{"choices": [{"delta": {"content": "<thi"}}]}, {"choices": [{"delta": {"content": "nk>private"}}]}], True),
+        ]:
+            try:
+                parse_stream(io.BytesIO(encoded(events, terminal)), started=time.perf_counter(), timeout=120)
+            except ValueError:
+                continue
+            raise AssertionError("invalid stream was accepted")
+        for raw in (b'data: private invalid JSON\n\n', b'\xff', b'data: ' + b'x' * (1024 * 1024 + 1)):
+            try:
+                parse_stream(io.BytesIO(raw), started=time.perf_counter(), timeout=120)
+            except ValueError:
+                continue
+            raise AssertionError("malformed stream was accepted")
+    assert output.getvalue() == ""
+
 
 def endpoint(base_url: str, path: str) -> str:
     return base_url.rstrip("/") + path
@@ -203,8 +255,8 @@ def parse_json(response: HTTPResponse) -> Any | None:
             f"server returned invalid JSON ({error.msg})") from error
 
 
-def chat_payload(text: str, max_tokens: int) -> dict[str, Any]:
-    return {
+def chat_payload(text: str, max_tokens: int, streaming: bool = False) -> dict[str, Any]:
+    payload = {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": text},
@@ -215,8 +267,11 @@ def chat_payload(text: str, max_tokens: int) -> dict[str, Any]:
         "top_k": 20,
         "min_p": 0,
         "max_tokens": max_tokens,
-        "stream": False,
+        "stream": streaming,
     }
+    if streaming:
+        payload["stream_options"] = {"include_usage": True}
+    return payload
 
 
 def extract_translation(data: Any) -> tuple[str, str]:
@@ -232,17 +287,141 @@ def extract_translation(data: Any) -> tuple[str, str]:
     content = message["content"].strip()
     if not content:
         raise ValueError("translation is empty")
-    if "reasoning" in message or "<think>" in content or "</think>" in content:
+    if any(field in obj for obj in (data, choice, message) for field in ("reasoning", "reasoning_content")) or re.search(r"</?think>", content, re.I):
         raise ValueError("thinking output is present")
     finish_reason = choice.get("finish_reason")
     if finish_reason == "length":
         raise ValueError("translation was truncated (finish_reason=length)")
-    if finish_reason not in {"stop", "tool_calls"}:
+    if finish_reason != "stop":
         raise ValueError("response.choices[0].finish_reason is invalid")
     usage = data.get("usage")
-    if not isinstance(usage, dict) or not isinstance(usage.get("total_tokens"), int):
+    if not isinstance(usage, dict) or type(usage.get("total_tokens")) is not int or usage["total_tokens"] < 0:
         raise ValueError("response.usage.total_tokens is missing")
     return content, finish_reason
+
+
+def parse_stream(response, *, started: float, timeout: float, sock=None,
+                 now=time.perf_counter) -> tuple[dict[str, Any], dict[str, Any]]:
+    decoder = codecs.getincrementaldecoder("utf-8")("strict")
+    buffer = ""
+    lines: list[str] = []
+    event_bytes = 0
+    text = ""
+    finish = None
+    usage = None
+    first_content = None
+    content_chunks = 0
+    completed = False
+    while not completed:
+        remaining = timeout - (now() - started)
+        if remaining <= 0:
+            raise ValueError("stream deadline exceeded")
+        if sock is not None:
+            sock.settimeout(remaining)
+        chunk = response.read1(4096)
+        try:
+            buffer += decoder.decode(chunk, final=not chunk)
+        except UnicodeError as error:
+            raise ValueError("invalid stream encoding") from error
+        while True:
+            boundary = re.search(r"\r\n|\r|\n", buffer)
+            if boundary is None or (chunk and boundary.group() == "\r" and boundary.end() == len(buffer)):
+                break
+            line, buffer = buffer[:boundary.start()], buffer[boundary.end():]
+            if line == "" and lines:
+                raw = "\n".join(lines)
+                lines = []
+                event_bytes = 0
+                if raw == "[DONE]":
+                    completed = True
+                    break
+                try:
+                    event = json.loads(raw)
+                except ValueError as error:
+                    raise ValueError("invalid SSE JSON") from error
+                if not isinstance(event, dict) or any(k in event for k in ("reasoning", "reasoning_content")):
+                    raise ValueError("invalid stream event")
+                choices = event.get("choices")
+                if choices == []:
+                    incoming_usage = event.get("usage")
+                    if finish != "stop" or usage is not None or not isinstance(incoming_usage, dict):
+                        raise ValueError("invalid stream usage event")
+                    usage = incoming_usage
+                else:
+                    if not isinstance(choices, list) or len(choices) != 1 or finish is not None or event.get("usage") is not None:
+                        raise ValueError("invalid stream choice")
+                    choice = choices[0]
+                    delta = choice.get("delta") if isinstance(choice, dict) else None
+                    if not isinstance(delta, dict) or any(k in obj for obj in (choice, delta) for k in ("reasoning", "reasoning_content", "tool_calls", "function_call")):
+                        raise ValueError("thinking or tools in stream")
+                    if delta.get("role", "assistant") != "assistant" or choice.get("index", 0) != 0:
+                        raise ValueError("invalid stream role or index")
+                    if "content" in delta and not isinstance(delta["content"], str):
+                        raise ValueError("invalid stream content")
+                    if choice.get("finish_reason") is not None:
+                        finish = choice["finish_reason"]
+                        if finish != "stop":
+                            raise ValueError("translation did not stop normally")
+                    content = delta.get("content", "")
+                    if content:
+                        if first_content is None:
+                            first_content = now() - started
+                        content_chunks += 1
+                        text += content
+                        if len(text.encode("utf-16-le", errors="surrogatepass")) > 64 * 1024 * 2 or re.search(r"</?think>", text, re.I):
+                            raise ValueError("invalid accumulated content")
+            elif line == "data" or line.startswith("data:"):
+                value = line[5:]
+                if value.startswith(" "):
+                    value = value[1:]
+                lines.append(value)
+                event_bytes += len(value.encode("utf-8")) + 1
+                if event_bytes > 1024 * 1024:
+                    raise ValueError("SSE event exceeds limit")
+        if len(buffer.encode("utf-8")) + event_bytes > 1024 * 1024:
+            raise ValueError("SSE buffer exceeds limit")
+        if not chunk and not completed:
+            raise ValueError("stream ended without DONE")
+    data = {"choices": [{"message": {"content": text}, "finish_reason": finish}], "usage": usage}
+    extract_translation(data)
+    metadata = {"first_content_elapsed": first_content, "content_chunks": content_chunks,
+                "elapsed": now() - started}
+    for field in ("prompt_tokens", "completion_tokens"):
+        metadata[field] = usage.get(field)
+    details = usage.get("prompt_tokens_details")
+    if details is not None and not isinstance(details, dict):
+        raise ValueError("invalid cached token metadata")
+    metadata["cached_tokens"] = (details or {}).get("cached_tokens")
+    for field in ("prompt_tokens", "completion_tokens", "cached_tokens"):
+        value = metadata[field]
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError("invalid token metadata")
+    return data, metadata
+
+
+def request_stream(url: str, payload: dict[str, Any], origin: str | None,
+                   timeout: float) -> tuple[dict[str, Any], dict[str, Any]]:
+    parts = urlsplit(url)
+    connection = HTTPConnection(parts.hostname, parts.port, timeout=timeout)
+    started = time.perf_counter()
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    if origin is not None:
+        headers["Origin"] = origin
+    try:
+        connection.request("POST", parts.path, body=json.dumps(payload).encode("utf-8"), headers=headers)
+        sock = connection.sock
+        with connection.getresponse() as response:
+            if response.status != 200:
+                raise ValueError(f"chat request returned HTTP {response.status}")
+            if response.getheader("Content-Type", "").split(";")[0].strip().lower() != "text/event-stream":
+                raise ValueError("stream content type is invalid")
+            if origin is not None and response.getheader("Access-Control-Allow-Origin") != origin:
+                raise ValueError("allowed CORS POST was not accepted")
+            return parse_stream(response, started=started, timeout=timeout, sock=sock)
+    except (OSError, HTTPException) as error:
+        raise RuntimeError(f"stream request failed: {type(error).__name__}") from error
+    finally:
+        connection.close()
 
 
 def verify_health(base_url: str, timeout: float) -> None:
@@ -278,19 +457,31 @@ def verify_case(
     max_tokens: int,
     timeout: float,
     origin: str | None = None,
+    streaming: bool = False,
+    observations: list[dict[str, Any]] | None = None,
 ) -> float:
     started = time.perf_counter()
-    status, headers, data = request_json(
-        endpoint(base_url, "/v1/chat/completions"),
-        method="POST",
-        payload=chat_payload(case.text, max_tokens),
-        origin=origin,
-        timeout=timeout,
-    )
-    if status != 200:
-        raise ValueError(f"chat request returned HTTP {status}")
-    if origin is not None and headers.get("Access-Control-Allow-Origin") != origin:
-        raise ValueError("allowed CORS POST was not accepted")
+    if streaming:
+        data, metadata = request_stream(endpoint(base_url, "/v1/chat/completions"),
+                                        chat_payload(case.text, max_tokens, True), origin, timeout)
+        if observations is not None:
+            observations.append(metadata)
+        print(f"STREAM {case.name} first_content={metadata['first_content_elapsed']:.3f}s "
+              f"elapsed={metadata['elapsed']:.3f}s chunks={metadata['content_chunks']} "
+              f"prompt_tokens={metadata['prompt_tokens']} completion_tokens={metadata['completion_tokens']} "
+              f"cached_tokens={metadata['cached_tokens']}")
+    else:
+        status, headers, data = request_json(
+            endpoint(base_url, "/v1/chat/completions"),
+            method="POST",
+            payload=chat_payload(case.text, max_tokens),
+            origin=origin,
+            timeout=timeout,
+        )
+        if status != 200:
+            raise ValueError(f"chat request returned HTTP {status}")
+        if origin is not None and headers.get("Access-Control-Allow-Origin") != origin:
+            raise ValueError("allowed CORS POST was not accepted")
     translation, _ = extract_translation(data)
     if case.needs_japanese and not CJK.search(translation):
         raise ValueError("translation does not contain Japanese characters")
@@ -306,6 +497,8 @@ def verify_sequential(
     max_tokens: int,
     timeout: float,
     origin: str | None = None,
+    streaming: bool = False,
+    observations: list[dict[str, Any]] | None = None,
 ) -> list[float]:
     latencies = []
     for index in range(count):
@@ -316,7 +509,7 @@ def verify_sequential(
             (marker,),
         )
         latencies.append(verify_case(
-            base_url, case, max_tokens, timeout, origin))
+            base_url, case, max_tokens, timeout, origin, streaming, observations))
     return latencies
 
 
@@ -345,10 +538,11 @@ def main() -> int:
             failures.append(f"CORS: {error}")
 
     latencies: list[float] = []
+    observations: list[dict[str, Any]] = []
     for case in CASES:
         try:
             latency = verify_case(args.base_url, case,
-                                  args.max_tokens, args.timeout, args.origin)
+                                  args.max_tokens, args.timeout, args.origin, args.streaming, observations)
             latencies.append(latency)
             print(f"PASS {case.name} latency={latency:.3f}s")
         except (RuntimeError, ValueError) as error:
@@ -356,7 +550,7 @@ def main() -> int:
 
     try:
         serial_latencies = verify_sequential(
-            args.base_url, args.count, args.max_tokens, args.timeout, args.origin
+            args.base_url, args.count, args.max_tokens, args.timeout, args.origin, args.streaming, observations
         )
         latencies.extend(serial_latencies)
         print(
@@ -365,6 +559,12 @@ def main() -> int:
         )
     except (RuntimeError, ValueError) as error:
         failures.append(f"sequential: {error}")
+
+    if args.streaming:
+        if not any(item["content_chunks"] > 1 and item["first_content_elapsed"] < item["elapsed"] for item in observations):
+            failures.append("streaming: no content observed before completion")
+        if not any((item["cached_tokens"] or 0) > 0 for item in observations[1:]):
+            failures.append("streaming: shared input KV cache reuse not observed")
 
     if failures:
         for failure in failures:

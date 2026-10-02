@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { handleBridgeRequest } from "../bridge.js";
 import {
   BRIDGE_PORT_NAME,
   BridgeRegistry,
@@ -16,7 +17,9 @@ import {
   TranslationQueue,
   buildPayload,
   fetchTranslation,
-  handleTranslateMessage,
+  connectRequestPort,
+  REQUEST_PORT_NAME,
+  TranslationStream,
   sha256Hex,
   validateMessage,
   validateResponse,
@@ -24,17 +27,19 @@ import {
   validateBridgePortSender,
 } from "../service-worker.js";
 
-function responseFor(text, overrides = {}) {
-  return {
-    status: 200,
-    async json() {
-      return {
-        choices: [{ finish_reason: "stop", message: { content: `訳:${text}` } }],
-        usage: { total_tokens: 1 },
-        ...overrides,
-      };
-    },
-  };
+function responseFor(text, options) {
+  options.onChunk({ choices: [{ delta: { content: `訳:${text}` }, finish_reason: "stop" }] });
+  options.onChunk({ choices: [], usage: { total_tokens: 1 } });
+  return { status: 200 };
+}
+
+function completePort(port, text = "訳") {
+  const jobId = port.messages.filter((message) => message.type === "translate").at(-1).jobId;
+  port.receive({ type: "chunk", jobId, payload: {
+    choices: [{ delta: { content: text }, finish_reason: "stop" }],
+  } });
+  port.receive({ type: "chunk", jobId, payload: { choices: [], usage: { total_tokens: 1 } } });
+  port.receive({ type: "end", jobId });
 }
 
 function fakeTimers() {
@@ -92,7 +97,7 @@ test("validates trusted sender and exact translation input", () => {
   );
 });
 
-test("builds the fixed non-thinking, non-streaming payload", () => {
+test("builds the fixed non-thinking streaming payload with usage", () => {
   const payload = buildPayload("source");
   assert.equal(payload.messages[1].content, "source");
   assert.equal(payload.messages[0].role, "system");
@@ -102,7 +107,8 @@ test("builds the fixed non-thinking, non-streaming payload", () => {
   assert.equal(payload.top_k, 20);
   assert.equal(payload.min_p, 0);
   assert.equal(payload.max_tokens, 1024);
-  assert.equal(payload.stream, false);
+  assert.equal(payload.stream, true);
+  assert.deepEqual(payload.stream_options, { include_usage: true });
   assert.equal("model" in payload, false);
 });
 
@@ -123,126 +129,37 @@ test("validates response schema, finish reason, usage, and thinking markers", ()
   }
 });
 
-test("logs only fixed invalid-response diagnostics and stays silent for valid or other errors", async () => {
+test("stream rejects invalid finish, usage, thinking and schema without logging private text", async () => {
   const cases = [
-    {
-      payload: {
-        choices: [{ finish_reason: "length", message: { content: "秘密の訳文" } }],
-        usage: { total_tokens: 512 },
-      },
-      expected: {
-        finish_reason: "length",
-        content_present: true,
-        reasoning_present: false,
-        usage_total_tokens_present: true,
-      },
-    },
-    {
-      payload: {
-        choices: [{ finish_reason: "stop", message: { content: null } }],
-        usage: { total_tokens: 1 },
-      },
-      expected: {
-        finish_reason: "stop",
-        content_present: false,
-        reasoning_present: false,
-        usage_total_tokens_present: true,
-      },
-    },
-    {
-      payload: {
-        choices: [{ finish_reason: "stop", message: { content: "<think>秘密の推論</think>訳" } }],
-        usage: { total_tokens: 1 },
-      },
-      expected: {
-        finish_reason: "stop",
-        content_present: true,
-        reasoning_present: true,
-        usage_total_tokens_present: true,
-      },
-    },
-    {
-      payload: {
-        choices: [{ finish_reason: "stop", message: { content: "秘密の訳文" } }],
-        usage: {},
-      },
-      expected: {
-        finish_reason: "stop",
-        content_present: true,
-        reasoning_present: false,
-        usage_total_tokens_present: false,
-      },
-    },
-    {
-      payload: {
-        choices: [{ finish_reason: "stop", message: { content: "秘密の訳文" } }],
-        usage: { total_tokens: "512" },
-      },
-      expected: {
-        finish_reason: "stop",
-        content_present: true,
-        reasoning_present: false,
-        usage_total_tokens_present: false,
-      },
-    },
-    {
-      payload: {
-        choices: [{ finish_reason: "stop", message: { content: "秘密の訳文" } }],
-        usage: { total_tokens: -1 },
-      },
-      expected: {
-        finish_reason: "stop",
-        content_present: true,
-        reasoning_present: false,
-        usage_total_tokens_present: false,
-      },
-    },
+    { choices: [{ finish_reason: "length", delta: { content: "秘密の訳文" } }] },
+    { choices: [{ finish_reason: "stop", delta: { content: null } }] },
+    { choices: [{ delta: { content: "<think>秘密</think>" } }] },
+    { choices: [{ delta: { content: "訳", reasoning: "秘密" } }] },
+    { choices: [], usage: { total_tokens: 1 } },
   ];
-
-  for (const item of cases) {
+  for (const chunk of cases) {
     const capture = diagnosticsLogger();
-    await assert.rejects(
-      fetchTranslation("秘密の入力", {
-        logger: capture.logger,
-        requestImpl: async () => ({ status: 200, json: async () => item.payload }),
-      }),
-      (value) => value.code === "invalid_response",
-    );
-    assert.deepEqual(capture.calls, [["invalid_response", item.expected]]);
+    await assert.rejects(fetchTranslation("秘密の入力", {
+      logger: capture.logger,
+      requestImpl: async (_payload, options) => { options.onChunk(chunk); return { status: 200 }; },
+    }), (value) => value.code === "invalid_response");
+    assert.equal(capture.calls.length, 1);
+    assert.equal(capture.calls[0][0], "invalid_response");
+    assert.deepEqual(Object.keys(capture.calls[0][1]).sort(),
+      ["content_present", "finish_reason", "reasoning_present", "usage_total_tokens_present"]);
     assert.equal(JSON.stringify(capture.calls).includes("秘密"), false);
   }
-
-  const malformed = diagnosticsLogger();
-  await assert.rejects(
-    fetchTranslation("秘密の入力", {
-      logger: malformed.logger,
-      requestImpl: async () => ({ status: 200, json: async () => { throw new Error("秘密の例外"); } }),
-    }),
-    (value) => value.code === "invalid_response",
-  );
-  assert.deepEqual(malformed.calls, [["invalid_response", {
-    finish_reason: null,
-    content_present: false,
-    reasoning_present: false,
-    usage_total_tokens_present: false,
-  }]]);
-  assert.equal(JSON.stringify(malformed.calls).includes("秘密"), false);
-
   const valid = diagnosticsLogger();
   assert.equal(await fetchTranslation("source", {
     logger: valid.logger,
-    requestImpl: async () => responseFor("source"),
+    requestImpl: async (_payload, options) => responseFor("source", options),
   }), "訳:source");
   assert.deepEqual(valid.calls, []);
-
   const network = diagnosticsLogger();
-  await assert.rejects(
-    fetchTranslation("source", {
-      logger: network.logger,
-      requestImpl: async () => { throw new Error("network detail"); },
-    }),
-    (value) => value.code === "network_error",
-  );
+  await assert.rejects(fetchTranslation("source", {
+    logger: network.logger,
+    requestImpl: async () => { throw new Error("private network detail"); },
+  }), (value) => value.code === "network_error");
   assert.deepEqual(network.calls, []);
 });
 
@@ -251,11 +168,11 @@ test("coalesces duplicate jobs and processes FIFO with concurrency one", async (
   const pending = [];
   const queue = new TranslationQueue({
     hashImpl: (text) => text,
-    requestImpl: async (_tabId, payload) => {
+    requestImpl: async (_tabId, payload, options) => {
       const text = payload.messages[1].content;
       calls.push(text);
       await new Promise((resolve) => pending.push(resolve));
-      return responseFor(text);
+      return responseFor(text, options);
     },
   });
 
@@ -352,15 +269,7 @@ test("default translation delegates to the tab bridge without using global fetch
     assert.equal(port.messages.length, 1);
     assert.equal(port.messages[0].type, "translate");
     assert.equal(port.messages[0].payload.messages[1].content, "phase-5-6-default-bridge-test");
-    port.receive({
-      type: "result",
-      jobId: port.messages[0].jobId,
-      status: 200,
-      payload: {
-        choices: [{ finish_reason: "stop", message: { content: "訳" } }],
-        usage: { total_tokens: 1 },
-      },
-    });
+    completePort(port);
     assert.deepEqual(await settled, { value: "訳" });
     assert.equal(fetchCalls, 0);
   } finally {
@@ -413,9 +322,9 @@ test("uses successful translations in an expiring LRU cache", async () => {
     now: () => now,
     cacheLimit: 2,
     cacheTtlMs: 10,
-    requestImpl: async (_tabId, payload) => {
+    requestImpl: async (_tabId, payload, options) => {
       calls += 1;
-      return responseFor(payload.messages[1].content);
+      return responseFor(payload.messages[1].content, options);
     },
   });
 
@@ -434,64 +343,35 @@ test("uses successful translations in an expiring LRU cache", async () => {
   assert.equal(CACHE_TTL_MS, 30 * 60 * 1000);
 });
 
-test("returns fixed errors at the message boundary without fetching invalid input", async () => {
-  let called = false;
-  const translator = {
-    translate: async () => {
-      called = true;
-      return "訳";
-    },
-  };
-  const sender = {
-    id: "extension-id",
-    frameId: 0,
-    url: "https://discord.com/channels/1/2",
-    tab: { id: 1 },
-  };
-  assert.deepEqual(
-    await handleTranslateMessage({
-      message: { type: "translate", messageId: "chat-messages-1-2", text: "source" },
-      sender,
-      runtimeId: "extension-id",
-      translator,
-    }),
-    { ok: true, text: "訳" },
-  );
-  assert.equal(called, true);
-  called = false;
-  assert.deepEqual(
-    await handleTranslateMessage({
-      message: { type: "translate", messageId: "chat-messages-1-2", text: "source" },
-      sender: { ...sender, frameId: 1 },
-      runtimeId: "extension-id",
-      translator,
-    }),
-    { ok: false, error: "invalid_sender" },
-  );
-  assert.equal(called, false);
-  for (const code of ["hash_error", "lna_denied"]) {
-    const failingTranslator = {
-      translate: async () => { throw new TranslationError(code); },
-    };
-    assert.deepEqual(
-      await handleTranslateMessage({
-        message: { type: "translate", messageId: "chat-messages-1-2", text: "source" },
-        sender,
-        runtimeId: "extension-id",
-        translator: failingTranslator,
-      }),
-      { ok: false, error: code },
-    );
+test("request ports validate sender/input and return only fixed outcomes", async () => {
+  const sender = { id: "extension-id", frameId: 0, url: "https://discord.com/channels/1/2", tab: { id: 1 } };
+  let calls = 0;
+  const translator = { translate: async () => { calls++; return "訳"; } };
+  const invalidSender = fakePort({ ...sender, frameId: 1 }, REQUEST_PORT_NAME);
+  assert.equal(connectRequestPort(invalidSender, "extension-id", translator), false);
+  assert.equal(invalidSender.disconnected, true);
+  const invalidInput = fakePort(sender, REQUEST_PORT_NAME);
+  connectRequestPort(invalidInput, "extension-id", translator);
+  invalidInput.receive({ type: "translate", messageId: "wrong", text: "source" });
+  assert.deepEqual(invalidInput.messages, [{ type: "error", error: "invalid_input" }]);
+  assert.equal(calls, 0);
+  for (const code of [null, "hash_error", "lna_denied"]) {
+    const target = fakePort(sender, REQUEST_PORT_NAME);
+    connectRequestPort(target, "extension-id", {
+      translate: async (_text, _tabId, options) => {
+        if (code) throw new TranslationError(code);
+        options.onProgress("途");
+        return "途中訳";
+      },
+    });
+    target.receive({ type: "translate", messageId: "chat-messages-1-2", text: "source" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(target.messages, code ? [{ type: "error", error: code }] : [
+      { type: "progress", text: "途" }, { type: "result", text: "途中訳" },
+    ]);
+    target.receive({ type: "translate", messageId: "chat-messages-1-2", text: "source" });
+    assert.equal(target.messages.length, code ? 1 : 2);
   }
-  assert.deepEqual(
-    await handleTranslateMessage({
-      message: { type: "translate", messageId: "chat-messages-1-2", text: "source" },
-      sender,
-      runtimeId: "extension-id",
-      translator: { translate: async () => { throw { unexpected: true }; } },
-    }),
-    { ok: false, error: "network_error" },
-  );
   assert.ok(ERROR_CODES.includes("invalid_response"));
 });
 
@@ -537,15 +417,115 @@ test("accepts only the exact child bridge sender and routes a job to its tab", a
   assert.equal(port.messages[0].type, "translate");
   assert.equal(typeof port.messages[0].jobId, "string");
   assert.deepEqual(port.messages[0].payload, { fixed: true });
-  port.receive({
-    type: "result",
-    jobId: port.messages[0].jobId,
-    status: 200,
-    payload: { choices: [] },
+  // The pending request remains open for multiple intermediate events.
+  port.receive({ type: "chunk", jobId: port.messages[0].jobId, payload: { choices: [] } });
+  assert.equal(registry.pending.size, 1);
+  port.receive({ type: "end", jobId: port.messages[0].jobId });
+  assert.deepEqual(await pending, { status: 200 });
+});
+
+test("stream preserves whitespace and holds split thinking markers and surrogate pairs", () => {
+  const progress = [];
+  const stream = new TranslationStream((text) => progress.push(text));
+  stream.push({ choices: [{ delta: { role: "assistant" }, finish_reason: null }] });
+  stream.push({ choices: [{ delta: { content: " 訳\n" } }] });
+  stream.push({ choices: [{ delta: { content: "\uD83D" } }] });
+  assert.equal(progress.at(-1), " 訳\n");
+  stream.push({ choices: [{ delta: { content: "\uDE80" } }] });
+  assert.equal(progress.at(-1), " 訳\n🚀");
+  stream.push({ choices: [{ delta: { content: "<Th" } }] });
+  assert.equal(progress.at(-1), " 訳\n🚀");
+  assert.throws(() => stream.push({ choices: [{ delta: { content: "INK>secret" } }] }),
+    (value) => value.code === "invalid_response");
+});
+
+test("stream rejects missing or duplicate completion metadata, tools and oversized content", () => {
+  for (const chunks of [
+    [],
+    [{ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] }],
+    [{ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] }, { choices: [], usage: {} }],
+    [{ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] }, { choices: [], usage: { total_tokens: -1 } }],
+    [{ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] }, { choices: [], usage: { total_tokens: 1 } }, { choices: [], usage: { total_tokens: 1 } }],
+    [{ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] }, { choices: [{ delta: { content: "after" } }] }],
+    [{ choices: [{ delta: { reasoning_content: "private" } }] }],
+    [{ choices: [{ delta: { tool_calls: [] } }] }],
+    [{ choices: [{ delta: { role: "user" } }] }],
+    [{ choices: [{ delta: { content: "x".repeat(64 * 1024 + 1) } }] }],
+  ]) {
+    assert.throws(() => {
+      const stream = new TranslationStream();
+      for (const chunk of chunks) stream.push(chunk);
+      validateResponse(stream.response());
+    }, (value) => value.code === "invalid_response");
+  }
+});
+
+test("duplicate and late subscribers share progress, while unsubscribe does not cancel their job", async () => {
+  const registry = new BridgeRegistry();
+  const bridgeUrl = "chrome-extension://extension-id/bridge.html";
+  const bridge = fakePort({ id: "extension-id", frameId: 1, url: bridgeUrl, tab: { id: 12 } });
+  let controller;
+  const body = new ReadableStream({ start(value) { controller = value; } });
+  const pending = new Map();
+  const transportTasks = [];
+  bridge.postMessage = (message) => {
+    bridge.messages.push(message);
+    transportTasks.push(handleBridgeRequest({ postMessage: (event) => bridge.receive(event) }, message, pending, {
+      fetchImpl: async () => new Response(body, { headers: { "Content-Type": "text/event-stream" } }),
+    }));
+  };
+  registry.connect(bridge, "extension-id", bridgeUrl);
+  const queue = new TranslationQueue({
+    hashImpl: (text) => text,
+    requestImpl: (tabId, payload, options) => registry.request(tabId, payload, options),
   });
-  const response = await pending;
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { choices: [] });
+  const firstProgress = [];
+  const lateProgress = [];
+  const abort = new AbortController();
+  const first = queue.translate("source", 12, { onProgress: (text) => firstProgress.push(text), signal: abort.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  const emit = (payload) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`));
+  emit({ choices: [{ delta: { content: "途中" } }] });
+  await new Promise((resolve) => setImmediate(resolve));
+  const late = queue.translate(" source ", 99, { onProgress: (text) => lateProgress.push(text) });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(lateProgress, ["途中"]);
+  abort.abort();
+  emit({ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] });
+  emit({ choices: [], usage: { total_tokens: 4 } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(queue.cache.size, 0);
+  controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+  controller.close();
+  assert.equal(await first, "途中訳");
+  assert.equal(await late, "途中訳");
+  assert.deepEqual(firstProgress, ["途中"]);
+  assert.deepEqual(lateProgress, ["途中", "途中訳"]);
+  assert.equal(await queue.translate("source", 12), "途中訳");
+  assert.equal(bridge.messages.filter((message) => message.type === "translate").length, 1);
+  await Promise.all(transportTasks);
+  assert.equal(pending.size, 0);
+  assert.equal(registry.pending.size, 0);
+});
+
+test("invalid stream aborts the bridge and is never cached", async () => {
+  const registry = new BridgeRegistry();
+  const bridgeUrl = "chrome-extension://extension-id/bridge.html";
+  const bridge = fakePort({ id: "extension-id", frameId: 1, url: bridgeUrl, tab: { id: 12 } });
+  registry.connect(bridge, "extension-id", bridgeUrl);
+  const queue = new TranslationQueue({
+    logger: { warn() {} }, hashImpl: (text) => text,
+    requestImpl: (tabId, payload, options) => registry.request(tabId, payload, options),
+  });
+  const request = queue.translate("source", 12);
+  await new Promise((resolve) => setImmediate(resolve));
+  const jobId = bridge.messages[0].jobId;
+  bridge.receive({ type: "chunk", jobId, payload: { choices: [{ delta: { content: "途中" }, finish_reason: "length" }] } });
+  await assert.rejects(request, (value) => value.code === "invalid_response");
+  assert.deepEqual(bridge.messages.at(-1), { type: "abort", jobId });
+  assert.equal(queue.cache.size, 0);
+  bridge.receive({ type: "end", jobId });
+  assert.equal(queue.cache.size, 0);
 });
 
 test("does not route a content job to another tab and fails on bridge disconnect", async () => {
@@ -574,7 +554,7 @@ test("normalizes malformed bridge responses and bridge errors", async () => {
   await assert.rejects(malformed, (value) => value.code === "invalid_response");
 
   const denied = registry.request(11, { fixed: true });
-  port.receive({ type: "error", jobId: port.messages[1].jobId, error: "lna_denied" });
+  port.receive({ type: "error", jobId: port.messages.filter((message) => message.type === "translate").at(-1).jobId, error: "lna_denied" });
   await assert.rejects(denied, (value) => value.code === "lna_denied");
 });
 
@@ -591,14 +571,6 @@ test("keeps queue and final API validation in the service worker while using the
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(port.messages.length, 1);
   assert.deepEqual(port.messages[0].payload.messages[1].content, "source");
-  port.receive({
-    type: "result",
-    jobId: port.messages[0].jobId,
-    status: 200,
-    payload: {
-      choices: [{ finish_reason: "stop", message: { content: "訳" } }],
-      usage: { total_tokens: 1 },
-    },
-  });
+  completePort(port);
   assert.equal(await translation, "訳");
 });

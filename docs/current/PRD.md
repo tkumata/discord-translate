@@ -1,8 +1,9 @@
 # PRD: Discord ローカル日本語翻訳
 
 - Status: Current product definition
-- Last reviewed: 2026-08-18
-- Product maturity: Manual per-message translation implemented and Node-tested; Chrome integration unverified
+- Last reviewed: 2026-10-02
+- 2026-10-02: 順次表示を承認・実装済み。自動検証と実モデル検証は成功、実ChromeもユーザーのTask 5実機確認により合格・本変更完了。第11節を参照する。
+- Product maturity: Streaming manual translation implemented and tested; Task 5 Chrome acceptance confirmed by user
 
 ## 1. 背景
 
@@ -23,7 +24,7 @@ Discord Webの外国語メッセージを読むたびに外部翻訳サービス
 3. ローカルLLMを直接操作するだけではDiscord上の原文と訳文を対応付けられない。
 4. 閲覧しただけのメッセージを一律送信すると、不要な翻訳要求と待ち時間が発生する。
 
-Chrome Extensionのpopup health、service workerのqueue/cache/API検証、Discord tab内のExtension document bridge、各メッセージの`翻訳`ボタン押下時だけ依頼するcontent scriptは実装・Node自動検証済みである。実Chromeのbridge/load/POST/UI結合は未検証であり、製品全体はまだ受け入れ可能な状態ではない。
+Chrome Extensionのpopup health、service workerのqueue/cache/API検証、Discord tab内のExtension document bridge、各メッセージの`翻訳`ボタン押下時だけ依頼するcontent scriptは実装・Node自動検証済みである。順次表示の実Chrome受け入れは2026-10-02のユーザーによるTask 5実機確認で合格した。LAN拒否、長時間安定性、launchd等の別範囲の確認状態は変更しない。
 
 ## 4. 製品ゴール
 
@@ -38,7 +39,7 @@ Chrome Extensionのpopup health、service workerのqueue/cache/API検証、Disco
 - production向け汎用LLM serving platform
 - LAN・インターネット公開、認証、多ユーザー管理
 - 外部LLM API・翻訳API・telemetry・analytics
-- 複数model同時常駐、server-side cache、初期streaming
+- 複数model同時常駐、製品固有のserver-side訳文cache
 - 最初からの独自API serverやWeb framework導入
 - Discordへの投稿内容の保存・分析
 
@@ -66,18 +67,18 @@ Chrome Extensionのpopup health、service workerのqueue/cache/API検証、Disco
 - server契約を確認する検証script
 - Manifest V3 Chrome Extension（静的実装・Node 自動検証・headless unpacked load 済み）
 
-実Extension IDのCORS preflight、popup health、手動翻訳UI 8件を含むNode test 32件は確認済みである。実Chromeのbridge/Discord UI結合、launchdは未完了である。
+実Extension IDのCORS preflight、popup health、手動翻訳UI 8件を含むNode test 32件は確認済みである。実Chromeの順次表示は2026-10-02のユーザーによるTask 5実機確認で合格した。launchdは未実装である。
 
 ## 7. ユーザーストーリー
 
 | ID     | ストーリー                                                                                                                    | 完了状態                                                                                           |
 | ------ | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| US-001 | 利用者として、読みたい Discord メッセージだけをボタンで選び、その場で日本語訳を読みたい。                                     | 実装済み・Node test 合格、実 Chrome 結合未検証                                                     |
-| US-002 | 利用者として、原文を残したまま翻訳失敗の境界を固定 code で把握し、後で再試行したい。                                          | 再試行 UI と SHA-256/LNA/network の固定code 分離は実装済み・Node test 合格。実 Chrome 表示は未検証 |
+| US-001 | 利用者として、読みたい Discord メッセージだけをボタンで選び、その場で日本語訳を読みたい。                                     | 実装済み・Node test合格、Task 5実Chrome確認合格（ユーザー報告）                                                     |
+| US-002 | 利用者として、原文を残したまま翻訳失敗の境界を固定 code で把握し、後で再試行したい。                                          | 再試行 UI と SHA-256/LNA/network の固定code 分離は実装済み・Node test 合格。実Chrome表示はTask 5で合格（ユーザー報告） |
 | US-003 | 利用者として、本文が外部サービスへ送られない状態で使いたい。                                                                  | サーバ単体のみ確認、E2E未完了                                                                      |
 | US-004 | 利用者として、1コマンドでserverを起動し、明示的に停止したい。                                                                 | foreground起動・停止は完了                                                                         |
 | US-005 | 利用者として、Chromeに必要最小権限だけを許可したい。                                                                          | manifest/headless load/実ID preflight/実Chrome health確認済み                                      |
-| US-009 | 利用者として、Chromeのsecurityを無効化せず、Discord originへCORSや任意Extension resourceを公開せずにlocalhost翻訳を使いたい。 | bridge実装・Node test済み、実Chrome結合未検証                                                      |
+| US-009 | 利用者として、Chromeのsecurityを無効化せず、Discord originへCORSや任意Extension resourceを公開せずにlocalhost翻訳を使いたい。 | bridge実装・Node test済み、Task 5実Chrome確認合格（ユーザー報告）                                                      |
 | US-008 | 利用者として、翻訳をONにするときに接続可否を確認し、LNA拒否やサーバ停止時はOFFのまま原因codeを把握したい。                    | 実装済み・Node test合格・実Chrome health成功                                                       |
 | US-006 | 利用者として、ログイン後に安全な設定で自動起動したい。                                                                        | 未完了                                                                                             |
 | US-007 | 保守者として、modelをコード変更なしで入れ替えて同じ試験で比較したい。                                                         | model切替は可能、比較未実施                                                                        |
@@ -116,6 +117,8 @@ baselineは合否閾値ではない。ChromeとDiscordを同時利用した許�
 
 ## 10. 未決定・未検証事項
 
+以下のChrome関連記述は変更前の確認記録である。順次表示のTask 5実機確認は第11節のとおりユーザー報告により合格した。
+
 - 候補selector `li[id^="chat-messages-"]` と `[id^="message-content-"]` の認証済みDiscord実UI適合
 - Phase 5.4 bridgeのDiscord CSP下load、Port sender field、browser由来POST、OFF/unload/disconnectとcontent経由E2E
 - Markdown/URLの`**the patch**`不変条件の再確認
@@ -123,3 +126,16 @@ baselineは合否閾値ではない。ChromeとDiscordを同時利用した許�
 - launchdのrestart policyとbounded log方式
 
 headless unpacked load、実ID preflight、実Chrome health、sender URL hotfix、Phase 5.3 error分類、実Chromeの`network_error`とPOST未到達は確認済みである。Phase 5.4 bridgeとPhase 5.5手動翻訳UIは実装・Node test済みだが、実Chromeのbridge、button起点POST、DOM表示、Markdown/URL条件は未検証である。
+
+## 11. 訳文の順次表示（2026-10-02）
+
+- 状態: 2026-10-02承認・実装済み。Node自動検証と実モデル結合確認済み、実ChromeもユーザーのTask 5実機確認により合格し、本変更は完了。別範囲の受け入れ状態は変更しない。
+- 背景: 利用者は現行の翻訳動作を意図どおりと確認しているが、日本語訳が完成するまで待つ時間を短く感じられるようにしたい。
+- ゴール: 現在の `mlx-community/Qwen3-8B-4bit` を維持し、生成された訳文から原文直下で読み始められるようにする。
+- 対象: 手動で選んだメッセージの streaming 表示、途中失敗時の再試行、既存入力 KV cache の再利用確認。
+- 成功指標: cache miss の複数 chunk 応答で、完了前に部分訳が表示され、その後も同じ訳文ブロックが更新される。正常終了時だけ確定し、失敗・本文変更・OFF 後の部分訳は残さない。
+- 変更しない範囲: モデル、翻訳品質条件、queue の並行数1、timeout、権限、外部通信・本文永続化禁止。生成完了時間の短縮率は約束しない。
+
+第5節の初期streaming除外は承認済み順次表示仕様へ置き換えた。「server-side cache」の除外は製品固有の訳文 cache を意味し、公式 MLX-LM が既に持つメモリ内入力 KV cache とは区別する。2026-10-02 に異なる固定非機密英文間で 66 token の再利用を確認したため、cache 有効化の追加変更は不要である。
+
+関連: [追加要求](REQUIREMENTS.md#7-訳文の順次表示の追加要求2026-10-02)、[実装計画](../plans/active/2026-10-02-streaming-translation.md)。

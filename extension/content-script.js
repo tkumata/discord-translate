@@ -22,6 +22,7 @@ let enabled = false;
 let observer = null;
 let records = new WeakMap();
 let bridge = null;
+const activeRequests = new Set();
 
 function isDiscordTopFrame() {
   return (
@@ -115,6 +116,7 @@ function showLoading(content, record) {
   element.dataset.discordTranslate = "loading";
   element.className = "discord-translate-loading";
   element.textContent = "翻訳中…";
+  element.setAttribute("aria-live", "polite");
   content.after(element);
   record.ui = element;
 }
@@ -131,7 +133,12 @@ function showButton(content, container, record) {
   record.ui = element;
 }
 
-function showTranslation(content, record, translation) {
+function showTranslation(content, record, translation, pending = false) {
+  if (record.ui?.dataset.discordTranslate === "translation") {
+    record.ui.children[0].textContent = pending ? "日本語訳（翻訳中…）" : "日本語訳";
+    record.ui.children[1].textContent = translation;
+    return;
+  }
   removeRecordUi(record);
   const element = document.createElement("div");
   element.dataset.discordTranslate = "translation";
@@ -139,7 +146,9 @@ function showTranslation(content, record, translation) {
   element.lang = "ja";
   const label = document.createElement("span");
   label.className = "discord-translate-translation-label";
-  label.textContent = "日本語訳";
+  label.textContent = pending ? "日本語訳（翻訳中…）" : "日本語訳";
+  label.setAttribute("role", "status");
+  label.setAttribute("aria-live", "polite");
   const body = document.createElement("div");
   body.className = "discord-translate-translation-body";
   body.textContent = translation;
@@ -156,6 +165,8 @@ function showFailure(content, container, record, errorCode) {
 
   const message = document.createElement("span");
   message.textContent = `翻訳できませんでした（${errorCode}）`;
+  message.setAttribute("role", "status");
+  message.setAttribute("aria-live", "polite");
   const retry = document.createElement("button");
   retry.type = "button";
   retry.textContent = "再試行";
@@ -170,7 +181,7 @@ function fixedErrorCode(response) {
   return TRANSLATION_ERROR_CODES.has(response?.error) ? response.error : "network_error";
 }
 
-async function requestTranslation(content, container, retry = false) {
+function requestTranslation(content, container, retry = false) {
   if (!enabled || !container.isConnected || !content.isConnected) return;
   const text = normalizedContent(content);
   if (!text) return;
@@ -182,6 +193,7 @@ async function requestTranslation(content, container, retry = false) {
 
   const record = {
     container,
+    content,
     text,
     state: "pending",
     ui: null,
@@ -189,25 +201,64 @@ async function requestTranslation(content, container, retry = false) {
   records.set(content, record);
   showLoading(content, record);
 
-  let response;
+  let port;
+  let timeout;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(timeout);
+    activeRequests.delete(record);
+    port?.disconnect();
+  };
+  record.close = close;
+  activeRequests.add(record);
+  const fail = (code) => {
+    close();
+    if (!currentRecord(content, container, record)) return;
+    record.state = "failed";
+    showFailure(content, container, record, code);
+  };
+  const receive = (message) => {
+    if (closed) return;
+    if (!currentRecord(content, container, record)) {
+      close();
+      removeRecordUi(record);
+      if (records.get(content) === record) records.delete(content);
+      return;
+    }
+    const keys = message && typeof message === "object" ? Object.keys(message).sort().join(",") : "";
+    if ((message?.type === "progress" || message?.type === "result") && keys === "text,type" &&
+        typeof message.text === "string" && message.text.length > 0 && message.text.length <= 64 * 1024) {
+      if (message.type === "progress") {
+        showTranslation(content, record, message.text, true);
+      } else if (message.text.trim()) {
+        close();
+        record.state = "succeeded";
+        showTranslation(content, record, message.text.trim());
+      } else {
+        fail("invalid_response");
+      }
+    } else if (message?.type === "error" && keys === "error,type") {
+      fail(fixedErrorCode(message));
+    } else {
+      fail("invalid_response");
+    }
+  };
   try {
-    response = await chrome.runtime.sendMessage({
+    port = chrome.runtime.connect({ name: "discord-translate-request" });
+    port.onMessage.addListener(receive);
+    port.onDisconnect.addListener(() => { if (!closed) fail("network_error"); });
+    timeout = setTimeout(() => fail("request_timeout"), 240_000);
+    timeout?.unref?.();
+    port.postMessage({
       type: "translate",
       messageId: container.id,
       text,
     });
   } catch {
-    response = { ok: false };
+    fail("network_error");
   }
-
-  if (!currentRecord(content, container, record)) return;
-  if (response?.ok === true && typeof response.text === "string" && response.text.trim() !== "") {
-    record.state = "succeeded";
-    showTranslation(content, record, response.text.trim());
-    return;
-  }
-  record.state = "failed";
-  showFailure(content, container, record, fixedErrorCode(response));
 }
 
 function processContainer(container) {
@@ -221,12 +272,14 @@ function processContainer(container) {
   const previous = records.get(content);
 
   if (!text) {
+    previous?.close?.();
     removeRecordUi(previous);
     removeContainerUi(container);
     records.delete(content);
     return;
   }
   if (previous?.text === text && previous.container === container) return;
+  previous?.close?.();
   removeRecordUi(previous);
   removeContainerUi(container);
   const record = {
@@ -241,6 +294,13 @@ function processContainer(container) {
 
 function scan(root = document) {
   if (!enabled) return;
+  for (const record of activeRequests) {
+    if (!currentRecord(record.content, record.container, record)) {
+      record.close();
+      removeRecordUi(record);
+      if (records.get(record.content) === record) records.delete(record.content);
+    }
+  }
   const containers = [];
   if (root instanceof Element && root.matches(MESSAGE_CONTAINER_SELECTOR)) containers.push(root);
   if (typeof root.querySelectorAll === "function") {
@@ -263,6 +323,7 @@ function stopObserver() {
 function applyEnabled(nextEnabled) {
   enabled = nextEnabled === true;
   if (!enabled) {
+    for (const record of activeRequests) record.close();
     stopObserver();
     stopBridge();
     records = new WeakMap();

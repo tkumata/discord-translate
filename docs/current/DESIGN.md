@@ -1,7 +1,9 @@
 # 設計書
 
+2026-10-02承認の順次表示を実装済み。第12節に詳細を記載する。自動・実モデル検証は成功、実Chromeも2026-10-02のユーザーによるTask 5実機確認で合格した。入力KV cacheの実機確認結果は仕様書SPEC-KV-001を参照する。
+
 - Status: Current
-- Last reviewed: 2026-08-19
+- Last reviewed: 2026-10-02
 
 ## 1. 設計目的
 
@@ -10,20 +12,20 @@
 ## 2. システム構成と実装状態
 
 ```text
-[実装済み・Node test合格 / 実Chrome検証済み] Discord Web / content script
+[実装済み・Node test合格 / 順次表示のTask 5実Chrome確認合格（ユーザー報告）] Discord Web / content script
     selector候補 / 各message の翻訳 button / 原文直下 UI / stale結果破棄
-                │ chrome.runtime.sendMessage
+                │ 要求用runtime.Port / progress・result・error
                 ▼
 [実装済み・実Chrome health成功] Extension popup
     OFF→ON 時だけ GET /health / LNA prompt / enabled 確定
                 │ 許可済み Extension origin
                 ▼
-[Phase 5.6 完了 / 実 Chrome 検証済み] Extension service worker
+[実装済み・Node/実モデル検証済み / streamingのTask 5実Chrome確認合格（ユーザー報告）] Extension service worker
      sender/input / queue=1, max=64 / payload / response / cache=256, 30min
                 │ validated runtime.Port / job
                 ▼
-[Phase 5.6 完了 / 実 Chrome 検証済み] hidden Extension document bridge
-     fixed URL / POST / fetch=120s / fixed result envelope
+[実装済み・Node/実モデル検証済み / streamingのTask 5実Chrome確認合格（ユーザー報告）] hidden Extension document bridge
+     fixed URL / POST / fetch=120s / SSE chunk・end・固定error
                 │ POST http://127.0.0.1:8080/v1/chat/completions
                 ▼
 [実装済み] scripts/start-server.sh
@@ -43,9 +45,9 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 
 | コンポーネント | 所有する責務 | 所有しない責務 | 状態 |
 | ------------ | ---------- | -------------| --- |
-| Discord content script | 対象メッセージ検出、各メッセージの手動翻訳 UI、押下・連打抑止・stale 結果破棄、service worker への依頼、ON 中の bridge iframe 1個の lifecycle | HTTP、payload、Port job、model | 実装・Node test・実 Chrome 検証済み |
-| Extension service worker | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・最終応答検証、`invalid_response` 診断、重複排除、memory cache、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化 | Phase 5.6 完了。Node test 合格。実 Chrome 診断確認待ち |
-| Extension document bridge | 検証済み Port、固定 localhost URL への 120秒 POST、固定 result envelope、HTTP 200 JSON parse失敗時の`invalid_response`診断 | page message、任意 URL/payload、queue/cache、最終 API schema、storage | Node test 合格。実 Chrome 診断確認待ち |
+| Discord content script | 対象メッセージ検出、各メッセージの手動翻訳 UI、押下・連打抑止・stale 結果破棄、service worker への依頼、ON 中の bridge iframe 1個の lifecycle | HTTP、payload、Port job、model | 順次表示は実装・Node test済み、Task 5実Chrome確認合格（ユーザー報告） |
+| Extension service worker | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・stream検証・累積・購読・最終応答検証、`invalid_response` 診断、重複排除、memory cache、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化 | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
+| Extension document bridge | 検証済み Port、固定 localhost URL への 120秒 POST、SSE解析・chunk/end通知、HTTP 200 SSE不正時の`invalid_response`診断 | page message、任意 URL/payload、queue/cache、最終 API schema、storage | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
 | Extension popup | 全 Discord タブ共通の`enabled` 状態遷移、LNA prompt を trigger する固定 `/health` GET、5秒 timeout、厳密 health 検証、本文なし状態 code 表示 | Discord DOM、翻訳本文、chat completion、queue/cache | 実装済み・Node test 合格・実 Chrome health 成功 |
 | `scripts/start-server.sh` | 起動入力検証、loopback/CORS/offline/concurrency/log 設定、server exec | HTTP API 再実装、request 内容検証、cache | 実装済み |
 | `mlx_lm.server` | HTTP endpoint、モデルロード、生成処理 | Discord UI、製品固有 queue/cache | 依存として利用中 |
@@ -70,16 +72,16 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 ### 5.1 翻訳成功
 
 1. `enabled=true` の content script が候補 selector から message container、content、trim 済み本文を取得し、各メッセージへ`翻訳` button を1つ表示する。この検出・表示では要求を送らない。
-2. 利用者が `翻訳` または `再試行` を押すと、content script が `翻訳中…` へ遷移して重複押下を抑止し、`type`、`messageId`、`text` だけを service worker へ送る。
+2. 利用者が `翻訳` または `再試行` を押すと、content script が `翻訳中…` へ遷移して重複押下を抑止し、要求用Portで`type`、`messageId`、`text`だけをservice workerへ1回送る。
 3. service worker が sender と入力を検証し、本文の SHA-256 key を求める。
-4. 同じ key の running/queued Promise または有効な cache があれば共有し、miss なら FIFO queue へ入れる。
+4. 同じkeyのrunning/queued jobならPromiseと途中更新を共有し、途中参加へ累積訳文を返す。有効なcacheは完成訳を返し、missならFIFO queueへ入れる。
 5. queue の先頭 1 件だけを、依頼元 tab ID に対応する検証済み bridge へ送る。
-6. bridge が固定 localhost API へ 120 秒 timeout で POST し、固定 envelope を返す。
-7. service worker が job ID、HTTP、schema、thinking、truncation を最終検証する。
-8. content script が container 接続、content node、本文不変を再検証する。
-9. stale でなければ原文を残し、content 直後へ「日本語訳」ラベル付きの訳文ブロックを表示する。
+6. bridgeが固定localhost APIへ120秒timeoutでPOSTし、SSEのJSON chunkと終端を固定envelopeで返す。
+7. service workerがjob ID、HTTP、schema、thinking、truncationを検証し、途中累積textを通知する。正常finish、usage、終端を確認した場合だけ成功とcache保存を行う。
+8. content scriptが各通知でcontainer接続、content node、本文不変を再検証する。
+9. staleでなければ原文を残し、content直後の同じ訳文ブロックを途中更新する。生成中は「日本語訳（翻訳中…）」、最終成功時は「日本語訳」とする。
 
-手順 1〜9 は実装・Node test 済みである。Phase 5.6 で既定 `defaultTranslator` を bridge `requestImpl` へ復旧し、bridge fetch と service worker job 監督を 120 秒へ揃えた。実 Chrome で翻訳、timeout 境界、異常系を検証済みである。
+手順1〜9の順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告）である。旧方式については、Phase 5.6 で既定 `defaultTranslator` を bridge `requestImpl` へ復旧し、bridge fetch と service worker job 監督を 120 秒へ揃えた。実 Chrome で翻訳、timeout 境界、異常系を検証済みである。
 
 ### 5.2 有効化と LNA bootstrap
 
@@ -93,11 +95,11 @@ popup の health GET は LNA 許可取得に必要な例外であり、本文・
 
 ### 5.3 失敗
 
-- SHA-256失敗、local network拒否、timeout、その他network、HTTP error、JSON/schema不正、空content、thinking、truncationは固定codeへ正規化する。
+- SHA-256失敗、local network拒否、timeout、その他network、HTTP error、SSE/JSON/schema不正、空content、thinking、truncationは固定codeへ正規化する。
 - jobは別メッセージへ再割り当てしない。
-- content scriptは原文を削除せず、service workerの既存固定error codeと再試行可能な状態を表示する。
+- content scriptは原文を残し、部分訳を除去して既存固定error codeと再試行可能な状態を表示する。
 - 無限retryしない。利用者の再試行buttonだけが新しいjobを作る。
-- API応答の最終検証が`invalid_response`になったときだけservice workerが、bridgeのHTTP 200 JSON parseが失敗したときだけbridgeが、固定ラベルと4項目のmetadataをDevTools consoleへ出す。成功時と他のerror codeでは出さず、本文・訳文・payload・response・URL・ID・`error.message`・例外objectを渡さない。
+- stream内容または最終検証が`invalid_response`になったときだけservice workerが、bridgeのHTTP 200 SSE解析が失敗したときだけbridgeが、固定ラベルと4項目のmetadataをDevTools consoleへ出す。成功時と他のerror codeでは出さず、本文・訳文・payload・response・URL・ID・`error.message`・例外objectを渡さない。
 - SHA-256失敗は`hash_error`、fetchの`NotAllowedError`/`SecurityError`は`lna_denied`、fetch timeoutは`request_timeout`、その他fetch拒否と未知値は`network_error`とする。queue上限、queue待機、service worker終了も固定error codeへ正規化し、本文、URL、`error.message`を含めない。Phase 5.3後の実Chromeは`network_error`でPOST未到達。Phase 5.4ではbridge未接続・切断を`bridge_unavailable`へ分離する。
 - process再起動後は利用者の再試行または新規messageで処理を再開する。
 - Phase 5.6実装前は25秒でclient側だけがtimeoutしserver生成が継続すると、serverの応答write時に接続先がなく`BrokenPipeError`となった。bridge fetchとservice worker job監督を120秒へ揃え、観測済みの25秒超tailを有限上限内で完了させる。server-side cancellationは追加しない。実Chromeで境界条件と`BrokenPipeError`解消を検証済みである。
@@ -136,13 +138,13 @@ received -> cached-result
 
 queueとcacheの所有者はservice workerに一意化する。unique jobはrunningを含め最大64、queue待機120秒、bridge fetchとservice worker job監督は120秒、concurrency 1とする。最大待機+実行は240秒でChromeの単一処理5分未満に収める。jobは最初の正規requestのtab IDを保持し、同一keyは同じPromiseを共有する。cache keyはtrim済み本文のSHA-256、成功訳文を最大256件・30分のmemory LRUへ保存する。service workerまたはbridge終了時はin-flightを復旧保存しない。
 
-`chrome.runtime.onMessage`と`chrome.runtime.onInstalled` listenerはmodule top-levelで同期登録する。event listener登録を非同期初期化の完了後へ遅らせない。global stateはworker生存中の最適化に限り、再生成されても設定以外の永続状態を要求しない。
+`chrome.runtime.onConnect`と`chrome.runtime.onInstalled` listenerはmodule top-levelで同期登録する。event listener登録を非同期初期化の完了後へ遅らせない。global stateはworker生存中の最適化に限り、再生成されても設定以外の永続状態を要求しない。
 
 ### 6.3 UI 設定
 
 `enabled`だけを`chrome.storage.local`のsource of truthとする。install時の既定値はfalseで、update時に既存値を上書きしない。OFF→checking→ON/OFFの判断はpopupのpure export可能な状態遷移へ分離し、fetchとStorage APIは境界として注入可能にする。popup、content scriptはStorage API経由で読み、content scriptは`chrome.storage.onChanged`でON/OFFを反映する。本文、訳文、job、cacheはstorageへ保存しない。
 
-メッセージUIの最小状態は`翻訳`、`翻訳中…`、`訳文`、`固定error code + 再試行`である。状態所有者はcontent scriptの対象content nodeごとのrecordとし、`翻訳中…`ではbuttonをdisabledにする。本文変更またはDOM差し替えで旧recordを表示対象から外し、ON中の新本文には新しい`翻訳`を1つ作る。OFFではobserver、bridge、すべての挿入UIとrecordを破棄し、新規要求を作らない。
+メッセージUIの最小状態は`翻訳`、`翻訳中…`、`日本語訳（翻訳中…）`、`日本語訳`、`固定error code + 再試行`である。状態所有者はcontent scriptの対象content nodeごとのrecordとし、`翻訳中…`ではbuttonをdisabledにする。本文変更またはDOM差し替えで旧recordを表示対象から外し、ON中の新本文には新しい`翻訳`を1つ作る。OFFではobserver、bridge、すべての挿入UIとrecordを破棄し、新規要求を作らない。
 
 訳文UIは既存の`data-discord-translate="translation"`と`lang="ja"`を持つ親要素を維持し、その内部に可視の`日本語訳`ラベルと訳文本体を配置する。ラベルと本文は`textContent`で設定し、HTMLとして解釈しない。CSSで上余白8px、左線、薄い背景と内側余白を付け、通常の本文色と改行を維持する。2026-08-27の表示改善について、検証結果は[変更記録](../plans/completed/2026-08-27-translation-boundary.md)を参照する。
 
@@ -228,3 +230,35 @@ git diff --check
 - [ADR-006: メッセージ単位の手動翻訳を採用する](../adr/006-manual-per-message-translation.md)（Accepted, implemented; Chrome verified）
 
 Qwen3.5、queue 2、FastAPI/Flask、launchd詳細は採用判断が完了していないためADRにしていない。
+
+## 12. 訳文の順次表示（2026-10-02）
+
+状態: 2026-10-02承認・実装済み。Node test 50件、Python self-check、実モデルSSEと入力KV cache確認は成功。Task 5実Chrome確認は2026-10-02のユーザー報告により合格し、本変更は完了。エージェント自身のChrome接続は利用できなかった。判断は [ADR-007](../adr/007-streaming-translation.md)、外部契約は仕様書SPEC-STREAM-001〜003、実装単位は [active plan](../plans/active/2026-10-02-streaming-translation.md)へ置く。
+
+```text
+content script --要求用Port--> service worker / FIFO queue / 訳文LRU
+                                       │ 既存のbridge Port
+                                       ▼
+                              hidden Extension bridge
+                                       │ POST / SSE
+                                       ▼
+                               既存のmlx_lm.server
+
+SSE JSON -> bridge chunk -> worker検証・累積 -> progress -> 同じ訳文body
+[DONE]   -> bridge end   -> worker最終検証   -> result   -> 確定・LRU保存
+```
+
+| 所有者 | 追加・変更する責務 |
+| --- | --- |
+| bridge | 固定 streaming payload の境界検証、UTF-8/SSE 解析、chunk/end 通知、既知 job への abort と切断時のreader/AbortController 解放。翻訳内容・成功条件の判断は所有しない。 |
+| service worker | 要求用 Port の sender/input 検証、stream content/usage/終了状態の検証と累積、共有 job の購読者管理、最終確定と成功時だけの LRU 保存。実 HTTP は所有しない。 |
+| content script | 要求 Port と DOM record の対応、生成中の訳文 body 更新、確定/失敗表示、stale 通知の破棄と購読解除。SSE/API schema は所有しない。 |
+| 公式 runtime | モデル推論と既存のメモリ内入力 KV cache。再利用は確認済みで、追加の実装責務はない。 |
+
+job は既存の key、promise、tab ID、deadline に加え、現在の表示可能な累積訳文と購読 callback 集合を保持する。Promise は最終結果を共有し、途中通知は同じ job の購読者へ配信する。先行 job の最初の正規 tab に属する bridge で1回だけ推論し、後から参加した別 tab の正規購読者も自分の要求 Port で受け取る。個別購読解除は共有 job を別 bridge へ移さない。
+
+stream 検証状態は本文、finish reason、usage、終端の有無を必要最小限保持する。既存の成功応答検証へ渡せる最終形へまとめ、同じ reasoning/truncation/空応答条件を適用する。SSE 解析と翻訳検証の責務を混在させず、汎用 stream framework や新依存は作らない。入力 KV cache と訳文 cache を共通の cache 層に統合しない。
+
+content への progress は累積 text 方式に固定し、途中購読の追いつきとUI更新を簡単にする。生成上限 1024 token の範囲で利用し、転送量が実測で問題になる場合だけ差分方式を別判断する。DOM ブロックを token ごとに作り直さず、本文の `textContent` を更新する。
+
+翻訳用one-time `sendMessage`をPortへ置き換え済みで、旧翻訳経路の fallback は残さない。popup、Manifest、モデル、server CLI、queue 並行数と timeout は変更しない。実Chromeでの受け入れ確認は自動検証とは区別し、Task 5のユーザー報告により合格と記録する。

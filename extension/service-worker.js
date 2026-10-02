@@ -4,6 +4,7 @@ export const MAX_UNIQUE_JOBS = 64;
 export const MAX_CACHE_ENTRIES = 256;
 export const CACHE_TTL_MS = 30 * 60 * 1000;
 export const BRIDGE_PORT_NAME = "discord-translate-bridge";
+export const REQUEST_PORT_NAME = "discord-translate-request";
 export const BRIDGE_CONNECT_TIMEOUT_MS = 5_000;
 export const BRIDGE_REQUEST_TIMEOUT_MS = FETCH_TIMEOUT_MS;
 export const MESSAGE_ID_PATTERN = /^chat-messages-[0-9]+-[0-9]+$/;
@@ -122,7 +123,8 @@ export function buildPayload(text) {
     top_k: 20,
     min_p: 0,
     max_tokens: 1024,
-    stream: false,
+    stream: true,
+    stream_options: { include_usage: true },
   };
 }
 
@@ -136,7 +138,9 @@ export function responseDiagnostics(payload) {
   const choice = isPlainObject(payload) && Array.isArray(payload.choices)
     ? payload.choices[0]
     : null;
-  const message = isPlainObject(choice) && isPlainObject(choice.message) ? choice.message : null;
+  const message = isPlainObject(choice)
+    ? (isPlainObject(choice.message) ? choice.message : isPlainObject(choice.delta) ? choice.delta : null)
+    : null;
   const content = message && typeof message.content === "string" ? message.content : null;
   return {
     finish_reason: isPlainObject(choice) && typeof choice.finish_reason === "string"
@@ -190,6 +194,62 @@ export function validateResponse(payload) {
   return translation;
 }
 
+export class TranslationStream {
+  constructor(onProgress = () => {}) {
+    this.onProgress = onProgress;
+    this.text = "";
+    this.finishReason = null;
+    this.usage = null;
+    this.lastPayload = null;
+  }
+
+  push(payload) {
+    this.lastPayload = payload;
+    if (!isPlainObject(payload) || hasReasoningField(payload) || !Array.isArray(payload.choices)) {
+      throw error("invalid_response");
+    }
+    if (payload.choices.length === 0) {
+      if (this.finishReason !== "stop" || this.usage !== null ||
+          !isPlainObject(payload.usage) || !Number.isInteger(payload.usage.total_tokens) ||
+          payload.usage.total_tokens < 0) throw error("invalid_response");
+      this.usage = payload.usage;
+      return;
+    }
+    if (payload.choices.length !== 1 || this.finishReason !== null || payload.usage != null) {
+      throw error("invalid_response");
+    }
+    const choice = payload.choices[0];
+    const delta = choice?.delta;
+    if (!isPlainObject(choice) || hasReasoningField(choice) ||
+        (choice.index !== undefined && choice.index !== 0) ||
+        !isPlainObject(delta) || hasReasoningField(delta) ||
+        Object.hasOwn(delta, "tool_calls") || Object.hasOwn(delta, "function_call") ||
+        (delta.role !== undefined && delta.role !== "assistant") ||
+        (delta.content !== undefined && typeof delta.content !== "string")) {
+      throw error("invalid_response");
+    }
+    if (choice.finish_reason != null) {
+      this.finishReason = choice.finish_reason;
+      if (this.finishReason !== "stop") throw error("invalid_response");
+    }
+    if (delta.content) {
+      this.text += delta.content;
+      if (this.text.length > 64 * 1024 || /<\/?think>/i.test(this.text)) throw error("invalid_response");
+      // Hold a possible split thinking marker (and split UTF-16 surrogate) until it is identifiable.
+      const pending = this.text.match(/<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$|[\uD800-\uDBFF]$/i);
+      const visible = pending ? this.text.slice(0, pending.index) : this.text;
+      if (visible) this.onProgress(visible);
+    }
+  }
+
+  response() {
+    return {
+      choices: [{ finish_reason: this.finishReason, message: { content: this.text } }],
+      usage: this.usage,
+    };
+  }
+}
+
 export async function sha256Hex(text, cryptoApi = globalThis.crypto) {
   if (!cryptoApi?.subtle) throw error("hash_error");
   const bytes = new TextEncoder().encode(text);
@@ -213,9 +273,11 @@ export async function fetchTranslation(
     timeoutMs = FETCH_TIMEOUT_MS,
     setTimeoutImpl = (...args) => globalThis.setTimeout(...args),
     clearTimeoutImpl = (...args) => globalThis.clearTimeout(...args),
+    onProgress,
   } = {},
 ) {
   const controller = new AbortController();
+  const stream = new TranslationStream(onProgress);
   let timedOut = false;
   const timeout = setTimeoutImpl(() => {
     timedOut = true;
@@ -225,26 +287,19 @@ export async function fetchTranslation(
 
   try {
     const payload = buildPayload(text);
-    const response = await requestImpl(payload, { signal: controller.signal });
-    if (!response || response.status !== 200 || typeof response.json !== "function") {
+    const response = await requestImpl(payload, {
+      signal: controller.signal,
+      onChunk: (chunk) => stream.push(chunk),
+    });
+    if (!response || response.status !== 200) {
       throw error("http_error");
     }
-    let responsePayload;
-    try {
-      responsePayload = await response.json();
-    } catch {
-      logInvalidResponse(logger, null);
-      throw error("invalid_response");
-    }
-    try {
-      return validateResponse(responsePayload);
-    } catch (value) {
-      if (value instanceof TranslationError && value.code === "invalid_response") {
-        logInvalidResponse(logger, responsePayload);
-      }
-      throw value;
-    }
+    stream.lastPayload = stream.response();
+    return validateResponse(stream.lastPayload);
   } catch (value) {
+    if (value instanceof TranslationError && value.code === "invalid_response") {
+      logInvalidResponse(logger, /<\/?think>/i.test(stream.text) ? stream.response() : stream.lastPayload);
+    }
     if (value instanceof TranslationError) throw value;
     if (timedOut) throw error("request_timeout");
     if (value?.name === "NotAllowedError" || value?.name === "SecurityError") {
@@ -252,6 +307,7 @@ export async function fetchTranslation(
     }
     throw error("network_error");
   } finally {
+    controller.abort();
     clearTimeoutImpl(timeout);
   }
 }
@@ -289,7 +345,7 @@ export class TranslationQueue {
     this.running = false;
   }
 
-  translate(text, tabId = null) {
+  translate(text, tabId = null, { onProgress, signal } = {}) {
     let normalized;
     try {
       normalized = normalizeText(text);
@@ -298,7 +354,7 @@ export class TranslationQueue {
     }
 
     const promise = new Promise((resolve, reject) => {
-      this.hashQueue.push({ text: normalized, tabId, resolve, reject });
+      this.hashQueue.push({ text: normalized, tabId, onProgress, signal, resolve, reject });
     });
     this.processHashQueue();
     return promise;
@@ -311,7 +367,7 @@ export class TranslationQueue {
       const request = this.hashQueue.shift();
       try {
         const key = await this.hashImpl(request.text);
-        Promise.resolve(this.enqueue(key, request.text, request.tabId)).then(request.resolve, request.reject);
+        Promise.resolve(this.enqueue(key, request.text, request.tabId, request)).then(request.resolve, request.reject);
       } catch (value) {
         request.reject(value);
       }
@@ -319,12 +375,15 @@ export class TranslationQueue {
     this.hashing = false;
   }
 
-  enqueue(key, text, tabId) {
+  enqueue(key, text, tabId, options) {
     const cached = this.getCached(key);
     if (cached !== undefined) return cached;
 
     const existing = this.jobs.get(key);
-    if (existing) return existing.promise;
+    if (existing) {
+      this.subscribe(existing, options);
+      return existing.promise;
+    }
     if (this.jobs.size >= this.maxJobs) throw error("queue_full");
 
     let resolvePromise;
@@ -343,13 +402,32 @@ export class TranslationQueue {
       state: "queued",
       enqueuedAt: this.now(),
       deadlineTimer: null,
+      subscribers: new Set(),
+      progress: "",
     };
     this.jobs.set(key, job);
+    this.subscribe(job, options);
     this.queue.push(job);
     job.deadlineTimer = this.setTimeoutImpl(() => this.expire(job), this.queueWaitMs);
     unrefTimer(job.deadlineTimer);
     this.pump();
     return promise;
+  }
+
+  subscribe(job, { onProgress, signal } = {}) {
+    if (typeof onProgress !== "function" || signal?.aborted) return;
+    const subscriber = { onProgress, signal, abort: null };
+    subscriber.abort = () => {
+      job.subscribers.delete(subscriber);
+      signal?.removeEventListener("abort", subscriber.abort);
+    };
+    job.subscribers.add(subscriber);
+    signal?.addEventListener("abort", subscriber.abort, { once: true });
+    if (job.progress) onProgress(job.progress);
+  }
+
+  clearSubscribers(job) {
+    for (const subscriber of job.subscribers) subscriber.abort();
   }
 
   getCached(key) {
@@ -376,6 +454,7 @@ export class TranslationQueue {
     if (job.state !== "queued") return;
     job.state = "expired";
     this.jobs.delete(job.key);
+    this.clearSubscribers(job);
     this.removeQueued(job);
     job.reject(error("queue_timeout"));
     this.pump();
@@ -395,6 +474,7 @@ export class TranslationQueue {
       if (this.now() - job.enqueuedAt >= this.queueWaitMs) {
         job.state = "expired";
         this.jobs.delete(job.key);
+        this.clearSubscribers(job);
         job.reject(error("queue_timeout"));
         continue;
       }
@@ -412,6 +492,11 @@ export class TranslationQueue {
       timeoutMs: this.fetchTimeoutMs,
       setTimeoutImpl: this.setTimeoutImpl,
       clearTimeoutImpl: this.clearTimeoutImpl,
+      onProgress: (text) => {
+        // ponytail: cumulative text is bounded by 1024 tokens; use deltas if transfer cost matters.
+        job.progress = text;
+        for (const subscriber of job.subscribers) subscriber.onProgress(text);
+      },
     }).then(
       (translation) => {
         this.saveCache(job.key, translation);
@@ -422,6 +507,7 @@ export class TranslationQueue {
       },
     ).finally(() => {
       this.jobs.delete(job.key);
+      this.clearSubscribers(job);
       this.running = false;
       this.pump();
     });
@@ -438,25 +524,21 @@ const BRIDGE_RESULT_ERRORS = new Set([
 function bridgeResult(message, jobId) {
   if (
     !isPlainObject(message) ||
-    message.jobId !== jobId ||
-    (message.type !== "result" && message.type !== "error")
+    message.jobId !== jobId
   ) {
     return null;
   }
   const keys = Object.keys(message).sort();
-  if (keys.join(",") === "jobId,payload,status,type") {
-    if (message.status !== 200) return null;
-    return {
-      status: 200,
-      json: async () => message.payload,
-    };
+  if (message.type === "chunk" && keys.join(",") === "jobId,payload,type") {
+    return { chunk: message.payload };
   }
-  if (keys.join(",") === "jobId,status,type") {
+  if (message.type === "end" && keys.join(",") === "jobId,type") return { end: true };
+  if (message.type === "result" && keys.join(",") === "jobId,status,type") {
     return message.status !== 200 &&
       Number.isInteger(message.status) &&
       message.status >= 100 &&
       message.status <= 599
-      ? { status: message.status, json: async () => null }
+      ? { status: message.status }
       : null;
   }
   if (message.type === "error" && keys.join(",") === "error,jobId,type") {
@@ -476,7 +558,7 @@ export class BridgeRegistry {
     this.pending = new Map();
   }
 
-  request(tabId, payload, { signal } = {}) {
+  request(tabId, payload, { signal, onChunk } = {}) {
     if (!Number.isInteger(tabId)) return Promise.reject(error("bridge_unavailable"));
     const jobId = createJobId();
     return new Promise((resolve, reject) => {
@@ -485,6 +567,7 @@ export class BridgeRegistry {
         tabId,
         payload,
         signal,
+        onChunk,
         entry: null,
         timer: null,
         abort: null,
@@ -494,6 +577,10 @@ export class BridgeRegistry {
       this.pending.set(jobId, item);
       item.abort = () => this.finish(item, error("request_timeout"));
       signal?.addEventListener?.("abort", item.abort, { once: true });
+      if (signal?.aborted) {
+        item.abort();
+        return;
+      }
 
       const bridge = this.bridges.get(tabId);
       if (bridge) {
@@ -556,6 +643,14 @@ export class BridgeRegistry {
       this.finish(item, error("invalid_response"));
     } else if (result.error) {
       this.finish(item, error(result.error));
+    } else if (Object.hasOwn(result, "chunk")) {
+      try {
+        item.onChunk?.(result.chunk);
+      } catch (value) {
+        this.finish(item, value instanceof TranslationError ? value : error("network_error"));
+      }
+    } else if (result.end) {
+      this.finish(item, null, { status: 200 });
     } else {
       this.finish(item, null, result);
     }
@@ -572,24 +667,67 @@ export class BridgeRegistry {
     if (!this.pending.delete(item.jobId)) return;
     if (item.timer) this.clearTimeoutImpl(item.timer);
     item.signal?.removeEventListener?.("abort", item.abort);
+    if (failure && item.entry) {
+      try {
+        item.entry.port.postMessage({ type: "abort", jobId: item.jobId });
+      } catch {
+        // A disconnected transport cannot receive cleanup; preserve the original failure.
+      }
+    }
     if (failure) item.reject(failure);
     else item.resolve(value);
   }
 }
 
-export async function handleTranslateMessage({ message, sender, runtimeId, translator }) {
-  if (!validateSender(sender, runtimeId)) return { ok: false, error: "invalid_sender" };
-  let validated;
-  try {
-    validated = validateMessage(message);
-  } catch (value) {
-    return { ok: false, error: toErrorCode(value) };
+export function connectRequestPort(port, runtimeId, translator) {
+  if (port?.name !== REQUEST_PORT_NAME || !validateSender(port.sender, runtimeId)) {
+    port?.disconnect?.();
+    return false;
   }
-  try {
-    return { ok: true, text: await translator.translate(validated.text, sender.tab.id) };
-  } catch (value) {
-    return { ok: false, error: toErrorCode(value) };
-  }
+  let received = false;
+  let closed = false;
+  const controller = new AbortController();
+  const send = (message) => {
+    if (closed) return;
+    try {
+      port.postMessage(message);
+    } catch {
+      closed = true;
+      controller.abort();
+    }
+  };
+  const finish = (message) => {
+    send(message);
+    closed = true;
+    controller.abort();
+  };
+  port.onDisconnect.addListener(() => {
+    closed = true;
+    controller.abort();
+  });
+  port.onMessage.addListener((message) => {
+    if (closed) return;
+    if (received) {
+      finish({ type: "error", error: "invalid_input" });
+      return;
+    }
+    received = true;
+    let validated;
+    try {
+      validated = validateMessage(message);
+    } catch (value) {
+      finish({ type: "error", error: toErrorCode(value) });
+      return;
+    }
+    translator.translate(validated.text, port.sender.tab.id, {
+      signal: controller.signal,
+      onProgress: (text) => send({ type: "progress", text }),
+    }).then(
+      (text) => finish({ type: "result", text }),
+      (value) => finish({ type: "error", error: toErrorCode(value) }),
+    );
+  });
+  return true;
 }
 
 export const defaultBridgeRegistry = new BridgeRegistry();
@@ -602,20 +740,14 @@ export function registerChromeListeners(
   translator = defaultTranslator,
   bridgeRegistry = defaultBridgeRegistry,
 ) {
-  if (!chromeApi?.runtime?.onMessage?.addListener) return false;
-
-  chromeApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    handleTranslateMessage({
-      message,
-      sender,
-      runtimeId: chromeApi.runtime.id,
-      translator,
-    }).then(sendResponse, () => sendResponse({ ok: false, error: "network_error" }));
-    return true;
-  });
+  if (!chromeApi?.runtime?.onConnect?.addListener) return false;
 
   if (chromeApi.runtime.onConnect?.addListener) {
     chromeApi.runtime.onConnect.addListener((port) => {
+      if (port.name === REQUEST_PORT_NAME) {
+        connectRequestPort(port, chromeApi.runtime.id, translator);
+        return;
+      }
       bridgeRegistry.connect(
         port,
         chromeApi.runtime.id,

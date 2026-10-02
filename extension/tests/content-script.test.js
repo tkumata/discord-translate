@@ -157,12 +157,36 @@ async function loadContentScript(onMessage = () => Promise.resolve({ ok: true, t
   const source = await readFile(new URL("../content-script.js", import.meta.url), "utf8");
   const document = new FakeDocument();
   const calls = [];
+  const ports = [];
   const chrome = {
     runtime: {
       getURL: (path) => `chrome-extension://test/${path}`,
-      sendMessage: (message) => {
-        calls.push(message);
-        return onMessage(message);
+      connect: ({ name }) => {
+        assert.equal(name, "discord-translate-request");
+        const messages = [];
+        const disconnects = [];
+        const port = {
+          closed: false,
+          onMessage: { addListener(listener) { messages.push(listener); } },
+          onDisconnect: { addListener(listener) { disconnects.push(listener); } },
+          receive(message) { for (const listener of messages) listener(message); },
+          disconnect() {
+            if (this.closed) return;
+            this.closed = true;
+            for (const listener of disconnects) listener();
+          },
+          postMessage(message) {
+            calls.push(message);
+            const response = onMessage(message);
+            if (response !== undefined) {
+              Promise.resolve(response).then((value) => {
+                this.receive(value.ok ? { type: "result", text: value.text } : { type: "error", error: value.error });
+              });
+            }
+          },
+        };
+        ports.push(port);
+        return port;
       },
     },
   };
@@ -182,7 +206,7 @@ async function loadContentScript(onMessage = () => Promise.resolve({ ok: true, t
     `${source}\nthis.__testApi = { applyEnabled, scan, processContainer, requestTranslation };`,
     context,
   );
-  return { ...context, document, calls, api: context.__testApi };
+  return { ...context, context, document, calls, ports, api: context.__testApi };
 }
 
 function message(document, id, text) {
@@ -203,16 +227,18 @@ function ui(container, state) {
 }
 
 test("creates one fixed hidden bridge iframe and removes it when disabled", async () => {
-  const source = await readFile(new URL("../content-script.js", import.meta.url), "utf8");
-  assert.match(source, /data-discord-translate-bridge/);
-  assert.match(source, /chrome\.runtime\.getURL\("bridge\.html"\)/);
-  assert.match(source, /setAttribute\("hidden", ""\)/);
-  assert.match(source, /setAttribute\("aria-hidden", "true"\)/);
-  assert.match(source, /setAttribute\("tabindex", "-1"\)/);
-  assert.match(source, /if \(bridge\?\.isConnected\) return/);
-  assert.match(source, /stopBridge\(\);/);
-  assert.doesNotMatch(source, /window\.postMessage/);
-  assert.doesNotMatch(source, /addEventListener\(["']message/);
+  const env = await loadContentScript();
+  env.api.applyEnabled(true);
+  env.api.applyEnabled(true);
+  const frames = env.document.querySelectorAll('iframe[data-discord-translate-bridge="true"]');
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].src, "chrome-extension://test/bridge.html");
+  assert.equal(frames[0].attributes.get("hidden"), "");
+  assert.equal(frames[0].attributes.get("aria-hidden"), "true");
+  assert.equal(frames[0].attributes.get("tabindex"), "-1");
+  assert.equal(env.calls.length, 0);
+  env.api.applyEnabled(false);
+  assert.equal(env.document.querySelectorAll('iframe[data-discord-translate-bridge="true"]').length, 0);
 });
 
 test("scan only renders one button per message and sends nothing", async () => {
@@ -361,4 +387,97 @@ test("replaced content node invalidates the old result and removes old UI", asyn
 
   assert.equal(container.querySelectorAll('[data-discord-translate="button"]').length, 1);
   assert.equal(container.querySelectorAll('[data-discord-translate="translation"]').length, 0);
+});
+
+test("progress updates one body before completion, preserves whitespace and clears partial failures", async () => {
+  const env = await loadContentScript(() => undefined);
+  const { container, content } = message(env.document, "chat-messages-8-1", "source");
+  env.api.applyEnabled(true);
+  ui(container, "button").click();
+  const port = env.ports[0];
+  port.receive({ type: "progress", text: " 訳\n" });
+  const translation = ui(container, "translation");
+  const body = translation.children[1];
+  assert.equal(translation.children[0].textContent, "日本語訳（翻訳中…）");
+  assert.equal(translation.children[0].attributes.get("aria-live"), "polite");
+  assert.equal(body.textContent, " 訳\n");
+  port.receive({ type: "progress", text: " 訳\n続き" });
+  assert.equal(ui(container, "translation"), translation);
+  assert.equal(translation.children[1], body);
+  port.receive({ type: "result", text: " 訳\n続き " });
+  assert.equal(translation.children[0].textContent, "日本語訳");
+  assert.equal(body.textContent, "訳\n続き");
+  assert.equal(port.closed, true);
+  assert.equal(content.textContent, "source");
+
+  const next = message(env.document, "chat-messages-8-2", "other");
+  env.api.scan();
+  ui(next.container, "button").click();
+  env.ports[1].receive({ type: "progress", text: "部分" });
+  env.ports[1].receive({ type: "error", error: "request_timeout" });
+  assert.equal(ui(next.container, "translation"), undefined);
+  assert.match(ui(next.container, "error").textContent, /request_timeout/);
+  ui(next.container, "error").children[1].click();
+  assert.equal(env.calls.length, 3);
+});
+
+test("OFF, editing, DOM replacement and removal close progress subscriptions and discard late events", async () => {
+  for (const change of ["off", "edit", "replace", "remove"]) {
+    const env = await loadContentScript(() => undefined);
+    const { container, content } = message(env.document, "chat-messages-9-1", "source");
+    env.api.applyEnabled(true);
+    ui(container, "button").click();
+    const port = env.ports[0];
+    port.receive({ type: "progress", text: "部分" });
+    if (change === "off") env.api.applyEnabled(false);
+    if (change === "edit") { content.textContent = "new"; env.api.scan(); }
+    if (change === "replace") {
+      const replacement = env.document.createElement("div");
+      replacement.id = content.id;
+      replacement.textContent = "new";
+      content.replaceWith(replacement);
+      env.api.scan();
+    }
+    if (change === "remove") { container.remove(); env.api.scan(); }
+    assert.equal(port.closed, true);
+    port.receive({ type: "progress", text: "古い部分" });
+    port.receive({ type: "result", text: "古い完成訳" });
+    assert.equal(env.document.querySelectorAll('[data-discord-translate="translation"]').length, 0);
+    if (change === "edit" || change === "replace") assert.equal(ui(container, "button").textContent, "翻訳");
+  }
+});
+
+test("unexpected disconnect or malformed progress removes partial output and permits retry", async () => {
+  for (const failure of ["disconnect", "malformed"]) {
+    const env = await loadContentScript(() => undefined);
+    const { container } = message(env.document, "chat-messages-10-1", "source");
+    env.api.applyEnabled(true);
+    ui(container, "button").click();
+    env.ports[0].receive({ type: "progress", text: "部分" });
+    if (failure === "disconnect") env.ports[0].disconnect();
+    else env.ports[0].receive({ type: "progress", text: "bad", extra: true });
+    assert.equal(ui(container, "translation"), undefined);
+    assert.match(ui(container, "error").textContent, failure === "disconnect" ? /network_error/ : /invalid_response/);
+    assert.equal(env.ports[0].closed, true);
+  }
+});
+
+test("the content deadline is absolute and releases a partial subscription", async () => {
+  const env = await loadContentScript(() => undefined);
+  let timer;
+  let cleared = false;
+  env.context.setTimeout = (callback, ms) => { timer = { callback, ms }; return timer; };
+  env.context.clearTimeout = () => { cleared = true; };
+  const { container } = message(env.document, "chat-messages-11-1", "source");
+  env.api.applyEnabled(true);
+  ui(container, "button").click();
+  const original = timer;
+  env.ports[0].receive({ type: "progress", text: "部分" });
+  assert.equal(timer, original);
+  assert.equal(timer.ms, 240_000);
+  timer.callback();
+  assert.equal(ui(container, "translation"), undefined);
+  assert.match(ui(container, "error").textContent, /request_timeout/);
+  assert.equal(env.ports[0].closed, true);
+  assert.equal(cleared, true);
 });

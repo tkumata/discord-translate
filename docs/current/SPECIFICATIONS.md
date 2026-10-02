@@ -1,11 +1,13 @@
 # 仕様書
 
+2026-10-02承認のstreamingを実装済み。第12節に通信・表示の詳細と入力KV cacheの実機確認結果を記載する。実ChromeもユーザーのTask 5実機確認により合格した。
+
 - Status: Current
-- Last reviewed: 2026-08-19
+- Last reviewed: 2026-10-02
 
 ## 1. 適用範囲
 
-本書は外部から観測できる動作と境界条件を定義する。要求IDは [要件定義書](REQUIREMENTS.md)、内部責務は [設計書](DESIGN.md) を参照する。server、popup、service worker、bridge、手動翻訳UI、Phase 5.6の既定bridge配線復旧と120秒timeoutは実装・Node自動検証・実Chrome検証済みである。
+本書は外部から観測できる動作と境界条件を定義する。要求IDは [要件定義書](REQUIREMENTS.md)、内部責務は [設計書](DESIGN.md) を参照する。旧方式のserver、popup、service worker、bridge、手動翻訳UIとPhase 5.6の配線・timeoutは実Chrome検証済み。順次表示はNode/実モデル検証済み、実ChromeもTask 5でユーザー確認済みである。
 
 ## 2. サーバ起動仕様
 
@@ -49,7 +51,7 @@
 - Method: `POST`
 - URL: `http://127.0.0.1:<PORT>/v1/chat/completions`
 - Content-Type: `application/json`
-- Streaming: `false`
+- Streaming: `true`（SSE）
 - `model`: クライアント要求では省略し、起動時 `MODEL` を使用する。
 
 要求bodyは system message と user message を分離し、次の生成値を使う。
@@ -62,7 +64,8 @@
 | `top_k` | `20` |
 | `min_p` | `0` |
 | `max_tokens` | `1024` |
-| `stream` | `false` |
+| `stream` | `true` |
+| `stream_options.include_usage` | `true` |
 
 `temperature=0`、`repetition_penalty`、`presence_penalty` は現行仕様に含めない。実装状態: APIクライアント用payloadと検証スクリプトに実装済み。
 
@@ -72,16 +75,9 @@ system promptは、日本語への自然な翻訳、翻訳結果のみの出力�
 
 ### SPEC-API-003 成功応答
 
-次をすべて満たす場合だけ成功とする。
+SSEをSPEC-STREAM-001に従って累積し、HTTP 200、非空訳文、`finish_reason=stop`、非負整数`usage.total_tokens`、reasoning/thinking不在、`[DONE]`をすべて確認した場合だけ成功とする。途中表示は成功ではなく、cacheへ保存しない。最終確定時だけ訳文をtrimする。
 
-- HTTP 200
-- JSON object
-- 非空文字列の `choices[0].message.content`
-- `finish_reason` が `stop` または現行検証が許容する `tool_calls`
-- 整数の `usage.total_tokens`
-- `reasoning`、`<think>`、`</think>` が存在しない
-
-表示対象はtrim後の `choices[0].message.content` だけである。実装状態: `scripts/verify.py` とExtension service workerに実装済み。Node自動検証済み。
+実装状態: Extensionと検証CLIに実装済み。Node test、固定非機密の実モデルstreaming検証は成功、実Chromeも2026-10-02のユーザーによるTask 5実機確認で合格。
 
 ### SPEC-API-004 Healthとreadiness
 
@@ -103,7 +99,7 @@ system promptは、日本語への自然な翻訳、翻訳結果のみの出力�
 
 ## 5. Chrome Extension仕様
 
-以下は現在有効な製品仕様である。popup health、service worker/bridge境界、button押下時だけ依頼する手動翻訳UI、Phase 5.6の既定bridge配線と120秒timeoutは実装・Node自動検証・実Chrome検証済みである。
+以下は現在有効な製品仕様である。popup healthと旧方式の手動翻訳・bridge配線・timeoutは実Chrome検証済み。順次表示の実ChromeもユーザーのTask 5実機確認により合格した。
 
 ### SPEC-EXT-001 有効化とメッセージ単位の手動翻訳UI
 
@@ -114,15 +110,15 @@ system promptは、日本語への自然な翻訳、翻訳結果のみの出力�
 - LNA拒否、timeout、network、HTTP非200、JSON parseまたはschema失敗では`enabled=false`を維持し、本文を含まない日本語状態と固定codeをpopupへ表示する。codeは順に`lna_denied`、`health_timeout`、`health_network_error`、`health_http_error`、`health_invalid_response`とする。ブラウザが拒否を識別可能な`NotAllowedError`を返さない場合は`health_network_error`へ正規化する。
 - ON→OFF操作はhealth確認をせず、即時`enabled=false`を保存する。
 - OFFでは新しい翻訳要求を作らず、Extensionが挿入した`翻訳`ボタン、訳文、loading、error、`再試行`をすべて除去する。原文には触れない。
-- ONへ変更すると、各Discordタブでbridgeと`MutationObserver`を開始し、現在表示中メッセージを1回走査する。以後の新規メッセージも検出するが、この走査・検出・bridge生成では`chrome.runtime.sendMessage`も翻訳POSTも行わない。
-- 翻訳可能な各メッセージには初期状態として`翻訳`buttonを1つだけ表示する。button押下時だけ、対象本文について1回の`chrome.runtime.sendMessage`を行う。
+- ONへ変更すると、各Discordタブでbridgeと`MutationObserver`を開始し、現在表示中メッセージを1回走査する。以後の新規メッセージも検出するが、この走査・検出・bridge生成では翻訳要求Portも翻訳POSTも開始しない。
+- 翻訳可能な各メッセージには初期状態として`翻訳`buttonを1つだけ表示する。button押下時だけ、対象本文について1つの要求用Portを開き、1回の翻訳要求を送る。
 - 押下後はbuttonを`翻訳中…`へ切り替えてdisabledにし、同じUI状態からの重複押下と重複message要求を抑止する。
 - 成功時は原文を置換せず、対象content要素の直後に`lang="ja"`の訳文ブロックを1つ表示する。先頭に小さな太字の`日本語訳`ラベルを置き、上余白8px、左の細線、薄い背景、内側余白で原文との境界と訳文の範囲を示す。訳文は通常の本文色と改行を維持し、色はDiscordのテーマ変数に合わせる。
 - 失敗時は原文を残し、`翻訳できませんでした（<固定error code>）`と`再試行`buttonを同じ位置に表示する。表示するcodeはservice workerが返した既存固定値だけとし、本文、response、`error.message`、URLを表示・logしない。自動retryは行わず、`再試行`押下だけが新しいmessage要求を作る。
 - 本文が変わった場合、または対象content要素が差し替えられた場合は、旧本文のloading、訳文、errorを破棄し、新本文用の初期`翻訳`buttonへ戻す。
 - `翻訳`、翻訳中、成功、失敗の表示要素にはExtension固有の`data-discord-translate`属性を付け、本文抽出と再走査の対象外にする。
 
-UI状態は `翻訳 -> 翻訳中… -> 訳文` または `翻訳 -> 翻訳中… -> 固定code + 再試行` の最小遷移とする。`再試行`は`翻訳中…`へ戻る。OFF、本文変更、DOM差し替えは進行中結果を表示対象から外し、OFFならUIを除去し、ONの新本文なら`翻訳`へ戻す。実装・Node test・実Chrome検証済みである。
+UI状態は`翻訳 -> 翻訳中… -> 日本語訳（翻訳中…） -> 日本語訳`とする。失敗時は部分訳を除去して`固定code + 再試行`へ進む。表示・購読解除の詳細はSPEC-STREAM-003を参照する。`再試行`は`翻訳中…`へ戻る。OFF、本文変更、DOM差し替えは進行中結果を表示対象から外し、OFFならUIを除去し、ONの新本文なら`翻訳`へ戻す。順次表示は実装・Node test済み、実ChromeもTask 5でユーザー確認済みである。
 
 ### SPEC-EXT-002 Discord DOM識別と本文
 
@@ -140,7 +136,7 @@ response受信時に対象containerがDOMから削除済み、content要素が�
 
 対応要求: REQ-F-009, REQ-F-012, REQ-N-001, REQ-N-004
 
-content scriptはlocalhostを直接fetchせず、利用者が`翻訳`または`再試行`を押したときだけ、次のJSON serializableなone-time messageを`chrome.runtime.sendMessage`でservice workerへ送る。
+content scriptはlocalhostを直接fetchせず、利用者が`翻訳`または`再試行`を押したときだけ、固定名`discord-translate-request`の要求用Portで次のJSON serializableなmessageをservice workerへ1回だけ送る。Portの詳細はSPEC-STREAM-002に従う。
 
 ```json
 {"type":"translate","messageId":"chat-messages-<channel>-<message>","text":"<trim済み本文>"}
@@ -148,7 +144,7 @@ content scriptはlocalhostを直接fetchせず、利用者が`翻訳`または`�
 
 service workerは、`sender.id === chrome.runtime.id`、整数の`sender.tab.id`、`sender.frameId === 0`、`sender.url`のschemeが`https:`かつhostnameが`discord.com`であることを検証する。Chromeの`runtime.MessageSender`で送信元page/frame URLを表す正本は`sender.url`であり、`sender.tab.url`へ依存しない。messageはplain object、`type === "translate"`、上記形式の`messageId`、1〜8,000 UTF-16 code unitの文字列`text`だけを受理し、URLやpayloadを呼出側から受け取らない。不正入力はfetchせず、本文を含まないerror codeを返す。
 
-service workerはSPEC-API-001/002の固定payloadを構築し、翻訳依頼を受理したsenderのtab IDに対応する検証済みbridgeへ渡す。bridgeだけが定数`http://127.0.0.1:8080/v1/chat/completions`、`POST`、`Content-Type: application/json`、120秒timeoutでfetchする。service workerはbridge requestを既定`requestImpl`として使い、global fetchを既定経路にしない。service workerはbridgeのjob ID、envelope、HTTP statusとSPEC-API-003を最終検証し、成功時もtrim済み訳文だけをcontent scriptへ返す。cache hitはbridgeもPOSTも使わず、同一keyのqueued/running jobは既存Promiseを共有するため、1回のbutton押下が常に新しいPOSTを意味するわけではない。
+service workerはSPEC-API-001/002の固定payloadを構築し、翻訳依頼を受理したsenderのtab IDに対応する検証済みbridgeへ渡す。bridgeだけが定数`http://127.0.0.1:8080/v1/chat/completions`、`POST`、`Content-Type: application/json`、120秒timeoutでfetchする。service workerはbridge requestを既定`requestImpl`として使い、global fetchを既定経路にしない。service workerはbridgeのjob ID、envelope、HTTP statusとSPEC-API-003を最終検証し、検証済み途中textと、最終成功時のtrim済み訳文をcontent scriptへ返す。cache hitはbridgeもPOSTも使わず、同一keyのqueued/running jobは既存Promiseを共有するため、1回のbutton押下が常に新しいPOSTを意味するわけではない。
 
 翻訳サーバへのPOSTを開始できる入口は、`翻訳`または`再試行`押下から届いた正規message要求のcache missだけである。DOM走査、`MutationObserver`通知、button/bridge生成、popupのLNA bootstrap用health GET、cache hitは翻訳POSTではない。実装状態: Phase 5.6で`defaultTranslator`を検証済みbridge registryの`requestImpl`へ復旧し、既定経路がservice workerのglobal fetchを呼ばないことをNode testで確認済みである。
 
@@ -176,7 +172,7 @@ service worker、content script、popupは本文・訳文・request/response bod
 - content scriptはON時に`chrome.runtime.getURL("bridge.html")`のiframeをtop tabへ1個だけ追加し、`hidden`、`aria-hidden="true"`、`tabindex="-1"`を設定する。iframe生成だけではPOSTしない。OFF時に削除し、tab unloadではdocumentとPortが破棄される。
 - bridgeは固定名の`runtime.Port`でservice workerへ接続する。service workerはExtension ID、bridgeの完全URL、Extension origin、整数tab ID、正の子frame IDを検証する。正規Discord content requestのtab IDと同じPortだけを使用し、tabごとの重複Portを拒否する。
 - bridgeは`window.postMessage`、page DOM event、外部messageをlistenしない。Portからもservice worker構築済みの固定shape、job ID、payloadだけを受理し、URL、method、headers、timeoutを入力として受け取らない。
-- bridgeは200応答のJSON、HTTP status、固定error codeだけを返す。service workerは未知job、別tab、不正shape、切断を拒否し、最終API responseを自ら検証する。本文、訳文、payload、response、URL、例外messageはlog・storageへ保存しない。
+- bridgeはSSEのJSON chunk、終端、非200のHTTP status、固定error codeだけを返す。service workerは未知job、別tab、不正shape、切断を拒否し、最終API responseを自ら検証する。本文、訳文、payload、response、URL、例外messageはlog・storageへ保存しない。
 - bridge未接続・切断は`bridge_unavailable`、不正envelopeは`invalid_response`、120秒abortは`request_timeout`、LNA拒否は`lna_denied`、その他fetch拒否は`network_error`、非200は`http_error`へ正規化する。自動無限retryは行わない。
 - cache hitはbridgeを使わない。同一keyの重複jobは最初にqueueへ入った正規requestのtab IDへ紐づくbridgeで1回だけ実行し、既存Promiseを共有する。
 
@@ -194,12 +190,12 @@ service worker、content script、popupは本文・訳文・request/response bod
 - key: `SHA-256(UTF-8(trim済み本文))`のhex。Web Cryptoを使い、本文そのものをMap keyにしない。
 - 重複job: 同じkeyのqueued/running Promiseを共有し、server要求を1回にまとめる。
 - cache: 成功した訳文だけをmemory `Map`へ最大256件、成功時から30分保存する。hit時に末尾へ移すLRUとし、期限切れと最古entryを削除する。errorはcacheしない。
-- service worker停止・Extension reload・Chrome終了: queue、in-flight、cacheをすべて失う。本文・訳文の復旧保存は行わない。未完了`sendMessage`はcontent scriptで失敗表示となり、利用者が手動再試行する。
+- service worker停止・Extension reload・Chrome終了: queue、in-flight、cacheをすべて失う。本文・訳文の復旧保存は行わない。未完了の要求Portはcontent scriptで失敗表示となり、利用者が手動再試行する。
 - DOM削除・本文変更: workerはjobを継続できるが、content scriptが結果を破棄する。cancel protocolは追加しない。
 
-64件は利用者が短時間に押した翻訳要求を有限に収める上限とする。queue待機120秒と実行120秒を別々に適用し、最大処理時間は240秒とする。実行120秒は固定7ケースの一括実行が25秒を超えて継続した実測tailを許容しつつ、Chromeの単一event/API call上限5分未満へ収める有限上限である。永続化、無限待ち、server-side cancellationは追加しない。256件・30分cache、queue 2不採用、server-side cache不採用は維持する。
+64件は利用者が短時間に押した翻訳要求を有限に収める上限とする。queue待機120秒と実行120秒を別々に適用し、最大処理時間は240秒とする。実行120秒は固定7ケースの一括実行が25秒を超えて継続した実測tailを許容しつつ、Chromeの単一event/API call上限5分未満へ収める有限上限である。永続化、無限待ち、server-side cancellationは追加しない。256件・30分cache、queue 2不採用、製品固有のserver-side訳文cache不採用は維持する。既存の入力KV cacheは再利用する。
 
-Chromeは通常、約30秒のidle、1 event/API callの5分超、service worker自身の`fetch()` responseの30秒超でExtension service workerを終了し得る。翻訳HTTPはbridge documentだけが実行し、service workerは`onMessage`から`true`を返して非同期response channelを維持する。Chrome 114以降はlong-lived messagingでのmessage送信がservice worker lifetimeを延長する。listenerはmodule top-levelで同期登録し、global queue/cacheの存続を正しさの前提にしない。最大240秒は単一処理5分未満であり、終了後に失われたcallerはerror UIから再試行する。
+Chromeは通常、約30秒のidle、1 event/API callの5分超、service worker自身の`fetch()` responseの30秒超でExtension service workerを終了し得る。翻訳HTTPはbridge documentだけが実行し、service workerは要求用Portでprogress/result/errorを送る。Portの開設だけでlifetimeは保証せず、contentも最大240秒の監督timerを持つ。Chrome 114以降はlong-lived messagingでのmessage送信がservice worker lifetimeを延長する。listenerはmodule top-levelで同期登録し、global queue/cacheの存続を正しさの前提にしない。最大240秒は単一処理5分未満であり、終了後に失われたcallerはerror UIから再試行する。
 
 ## 6. セキュリティ・プライバシー仕様
 
@@ -227,13 +223,13 @@ server listenerはIPv4 `127.0.0.1`だけとし、`0.0.0.0`、LAN IP、IPv6 wildc
 
 通常ログへrequest body、prompt、response、Discord本文を出力・保存しない。検証ツールもbodyを表示・保存しない。観測可能な値はHTTP status、latency、process状態、listener、RSSに限定する。現在のCRITICAL設定でもaccess logはstderrへ出るがbodyは確認されていない。
 
-Extensionのservice workerは、API応答の最終検証が`invalid_response`になった場合だけ、既存のDevTools `console.warn`へ固定ラベル`invalid_response`と次の4項目だけを1件渡す。bridgeはHTTP 200応答のJSON解析に失敗した場合だけ同じshapeを出す。`finish_reason`は文字列だけを値として扱い、それ以外・欠落は`null`とする。`content_present`は`choices[0].message.content`が文字列である場合だけ`true`、`reasoning_present`は`reasoning`/`reasoning_content` fieldまたは`<think>` markerの有無だけ、`usage_total_tokens_present`は非負整数の`usage.total_tokens`の有無だけをbooleanで示す。本文、訳文、payload、response、URL、ID、`error.message`、例外objectは渡さない。成功応答と`invalid_response`以外の失敗ではこの診断logを出さず、storageや外部通信へ保存・送信しない。実Chromeでの失敗条件別件数確認は未実施である。
+Extensionのservice workerは、API応答の最終検証が`invalid_response`になった場合だけ、既存のDevTools `console.warn`へ固定ラベル`invalid_response`と次の4項目だけを1件渡す。bridgeはHTTP 200のSSE構文、Content-Type、buffer上限、終端の検証に失敗した場合だけ同じshapeを出す。`finish_reason`は文字列だけを値として扱い、それ以外・欠落は`null`とする。`content_present`は`choices[0].message.content`またはstream eventの`choices[0].delta.content`が文字列である場合だけ`true`、`reasoning_present`は`reasoning`/`reasoning_content` fieldまたは`<think>` markerの有無だけ、`usage_total_tokens_present`は非負整数の`usage.total_tokens`の有無だけをbooleanで示す。本文、訳文、payload、response、URL、ID、`error.message`、例外objectは渡さない。成功応答と`invalid_response`以外の失敗ではこの診断logを出さず、storageや外部通信へ保存・送信しない。実Chromeでの失敗条件別件数確認は未実施である。
 
 ## 7. エラー時動作
 
 ### SPEC-ERR-001 クライアント判定
 
-HTTP非2xx、120秒timeout、接続不能、空body、JSON不正、schema不正、空翻訳、reasoning/thinking、`finish_reason=length` は失敗とする。検証CLIは本文なしの理由と非zero終了を返す。Extensionは原文を保持し、service workerの固定error codeと再試行buttonを示す。`invalid_response`時だけ、仕様ログで定めた4項目の非永続診断をDevTools consoleへ出す。SHA-256境界の失敗は`hash_error`、fetchの`NotAllowedError`/`SecurityError`は`lna_denied`、自身のabortは`request_timeout`、その他のfetch拒否と未知の値は`network_error`へ決定的に正規化する。本文、response、`error.message`、URLは表示・log・storage保存しない。bridge未接続・切断は`bridge_unavailable`とする。
+HTTP非2xx、120秒timeout、接続不能、空body、JSON/SSE不正、schema不正、終端欠落、空翻訳、reasoning/thinking、`finish_reason=length` は失敗とする。検証CLIは本文なしの理由と非zero終了を返す。Extensionは原文を保持し、service workerの固定error codeと再試行buttonを示す。`invalid_response`時だけ、仕様ログで定めた4項目の非永続診断をDevTools consoleへ出す。SHA-256境界の失敗は`hash_error`、fetchの`NotAllowedError`/`SecurityError`は`lna_denied`、自身のabortは`request_timeout`、その他のfetch拒否と未知の値は`network_error`へ決定的に正規化する。本文、response、`error.message`、URLは表示・log・storage保存しない。bridge未接続・切断は`bridge_unavailable`とする。
 
 ### SPEC-ERR-002 サーバ停止と復旧
 
@@ -287,3 +283,63 @@ HTTP非2xx、120秒timeout、接続不能、空body、JSON不正、schema不正�
 - <https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked>
 - <https://developer.chrome.com/docs/extensions/how-to/test/end-to-end-testing>
 - <https://developer.chrome.com/blog/local-network-access>
+
+## 12. 訳文の順次表示と入力KV cache（2026-10-02）
+
+状態: 2026-10-02承認・実装済み。Node test 50件、Python self-check、実モデルSSE/KV検証は成功。実Chromeは2026-10-02のユーザーによるTask 5実機確認で問題なしと報告され、本変更は完了。SPEC-API/EXT/QUEUE/ERRの該当契約を同期した。
+
+### SPEC-STREAM-001 要求と stream 応答
+
+- 固定URL、POST、同じ system/user message、thinking 無効、sampling、`max_tokens=1024` を維持し、`stream=true` と `stream_options={"include_usage":true}` だけを追加・変更する。model 指定は引き続き省略する。
+- bridge が `fetch` の HTTP 200 かつ `text/event-stream` を確認し、標準 `ReadableStream`/`TextDecoder` で SSE を解析する。bridge は通信形式だけを扱い、翻訳内容の最終検証は service worker が所有する。
+- UTF-8 途中分割、LF/CRLF/CR、空行による event 境界、1回の read に複数 event、複数 read にまたがる event、複数 `data:` 行に対応する。コメント、`id`/`retry` 等の SSE 制御 field を訳文にしない。JSON ではないdata、不正 frame、終端前EOFは `invalid_response` とする。
+- JSON event は追加分の `choices[0].delta.content`、終了choice、`choices=[]` の usage 専用 event として検証する。role だけの chunk と空 content は許容し、未知の role、tool call、reasoning field、分割された `<think>`/`</think>` を含む内容は拒否する。think marker になり得る末尾断片は判定まで表示を保留する。
+- service worker が content を順に累積する。途中では空白・改行を trim せず、最終確定時だけ既存どおり trim する。解析待ち buffer は 1 MiB、累積 content は 64 Ki UTF-16 code unit を上限とし、超過は `invalid_response` とする。
+- 非空の訳文、`finish_reason=stop`、reasoning不在、非負整数 `usage.total_tokens`、`data: [DONE]` をすべて確認して初めて成功とする。usage は最終 choice より後に届くため、それ以前に成功・cache 保存しない。
+- 非 200、timeout、ネットワーク失敗、不正応答、`finish_reason=length` は既存の固定 error へ正規化する。成功・失敗・通信切断時に reader と timer を解放し、失敗時は bridge 自身の `AbortController` で残りの読取りを終了する。
+
+### SPEC-STREAM-002 Extension 内の通信と重複要求
+
+- content script はボタン押下時だけ、固定名 `discord-translate-request` の `runtime.Port` を開く。1つの Port で既存 shape の `{type:"translate",messageId,text}` を1回だけ受理する。Port 接続だけでは POST しない。
+- service worker は既存の正規 Discord top frame sender/input 検証を適用する。bridge Port とは固定名・frame・URLの検証を分け、未知 Port や再要求、不正 shape を拒否する。
+- service worker から content へ送る shape は `{type:"progress",text}`、`{type:"result",text}`、`{type:"error",error}` だけとする。`progress.text` はその時点の累積訳文で、`result.text` だけが確定訳文である。Port と record が対応するため、content 側に新しい job ID を持たせない。
+- bridge は既存の検証済み Port で `{type:"chunk",jobId,payload}` を各 JSON event ごとに送り、`[DONE]` 受信後に `{type:"end",jobId}` を送る。非 200 の status と固定 error は既存 envelope を維持する。chunk で pending を完了せず、別 tab・未知 job・終端後の通知を表示へ流さない。
+- worker が検証失敗または実行 timeout で job を終了するときは、同じ bridge Port へ固定 shape の `{type:"abort",jobId}` を送り、bridge がその既知 job の reader/fetch を停止する。bridge 切断時も pending reader を停止する。これは HTTP 読取りの解放であり、利用者操作による個別 job cancel や server-side cancellation は追加しない。
+- queue の同一本文 job には複数の購読者を登録できる。途中参加者へ現在の累積訳文を1回送り、その後の更新と終端を共有する。POST は1回、cache hit は確定全文を1回返す。失敗・部分訳は cache へ保存しない。
+- OFF、本文変更、DOM 交換、Port 切断では購読を解除する。個別購読解除は共有推論 job を cancel せず、残る購読者へ通知を継続する。content は終端受信後に自身の Port を閉じ、予期しない切断では現在の record にだけ `network_error` を表示する。
+- queue 並行数1、最大 64 unique job、待機 120秒、実行 120秒、訳文 cache 256 件/30分は維持する。実行 timeout は stream 全体の絶対期限で、chunk 到着ごとに延長しない。
+- Portを開くだけでworker lifetimeを保証しない。worker終了は有限の失敗と手動再試行で扱い、listenerはtop-levelで同期登録する。contentも要求から最大240秒で未完了購読を失敗にし、Port/timerを解放する。
+
+### SPEC-STREAM-003 表示と失敗
+
+- 最初の非空progressを受けるまでは既存のdisabledな`翻訳中…`を表示する。
+- 最初のprogressで原文直下に既存の`lang="ja"`、`data-discord-translate="translation"`のブロックを1つ作り、ラベルを`日本語訳（翻訳中…）`とする。以降は同じ本文要素の`textContent`を更新する。
+- 正常なresultでラベルを`日本語訳`にし、確定全文へ更新する。cache hitは途中状態を経由せず、この完成表示へ進める。
+- 失敗時は部分訳を除去し、既存の固定errorと`再試行`へ戻す。原文は保持し、自動retryはしない。
+- すべてのprogress/result/errorで現在のrecord、enabled、container/contentの接続、対象本文の一致を再確認する。OFF・編集・DOM交換後の通知は破棄する。
+- 本文はHTMLとして解釈せず改行を保持する。状態の案内は`role="status"`/`aria-live="polite"`等で提供し、訳文本体のtoken単位読み上げは要求しない。新しいbuttonや設定項目は追加しない。
+
+### SPEC-KV-001 既存入力 KV cache の確認結果
+
+2026-10-02、既存 `server.sh` を変更せず起動し、`/health` の HTTP 200 と `/v1/models` の `mlx-community/Qwen3-8B-4bit` を確認した。移行前のExtensionと同じsystem prompt・非streaming payloadで、異なる固定非機密英文を3件直列送信した。
+
+| 要求 | HTTP | elapsed | prompt tokens | completion tokens | cached tokens | finish reason | reasoning |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 200 | 2.6584秒 | 81 | 11 | 0 | stop | なし |
+| 2 | 200 | 0.8657秒 | 81 | 10 | 66 | stop | なし |
+| 3 | 200 | 1.1625秒 | 84 | 14 | 66 | stop | なし |
+
+- 結論: 入力KV cacheは有効で、異なる原文間で共通prefixを再利用している。有効化の設定・コード追加は不要。
+- 境界: 公式runtimeのメモリ内KV cacheであり、Extensionの成功訳文LRUやモデルファイルcacheとは別物。server再起動後のhitは保証しない。永続cacheや独自serverは追加しない。
+- 測定条件: 本文・訳文を出力・保存せず、metadataだけを観測した。時間差には出力長や初回処理も含まれ、cacheだけの短縮率とは断定しない。この表は移行前の測定で、移行後の結果は次の記録を参照する。測定時点ではChrome描画を確認していない。Task 5の実画面受け入れ確認は後続のユーザー報告により合格。
+- 移行後: 同じモデル・system promptで異なる固定英文のstreaming要求を行い、usage eventの`prompt_tokens_details.cached_tokens > 0`を再確認済み。既存のKV cacheが効く限りserver起動設定を変更しない。
+- SPEC-LOG-001の例外として、固定非機密入力の手動検証に限りmodel名、prompt/completion/cached token数、finish reason、reasoning有無を記録できる。通常のDiscord要求には新しい性能logを追加しない。
+
+参照: [MLX-LM 0.31.3 API](https://github.com/ml-explore/mlx-lm/blob/v0.31.3/mlx_lm/SERVER.md)、[server実装](https://github.com/ml-explore/mlx-lm/blob/v0.31.3/mlx_lm/server.py)、[SSE標準](https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream)。
+
+#### streaming移行後の確認結果（2026-10-02）
+
+- `./.venv/bin/python scripts/verify.py --streaming --count 2`: 固定6ケースと異なる直列2件が全件成功。初回content 1.175秒、後続content 0.402〜0.420秒、完了0.719〜1.915秒。各要求は6〜25個の非空content chunkを受信した。
+- 入力KV cache: 初回0 token、後続7件66〜68 token。同じExtension promptと生成設定で異なる原文の再利用を再確認した。server CLI変更なし。
+- 実モデル→実装済みbridge SSE→worker queue/dedup/LRUの結合: 最初のprogress 493ms、完了2141ms、30 progress、重複/再利用を含めPOST 1回、終了後pending 0。Chrome Port部分は検証用の接続であり実Chrome検証ではない。
+- 本文・訳文は出力・保存していない。時刻はAPI/progress受信時刻で、実画面の初回描画時刻や高速化率を表さない。実ChromeのTask 5受け入れ確認は、2026-10-02のユーザー報告「問題ないです」により合格。エージェントのChrome接続は利用できず、実機確認の証拠はユーザー報告である。
