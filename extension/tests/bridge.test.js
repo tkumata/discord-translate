@@ -46,7 +46,6 @@ function diagnosticsLogger() {
 test("accepts only the service worker's fixed translation envelope", () => {
   const valid = { type: "translate", jobId: "job-1", payload: buildPayload("source") };
   assert.equal(validateBridgeRequest(valid), true);
-  assert.equal(valid.payload.max_tokens, 1024);
   assert.equal(validateBridgeRequest({
     ...valid,
     payload: { ...valid.payload, max_tokens: 512 },

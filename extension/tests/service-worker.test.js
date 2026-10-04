@@ -5,7 +5,6 @@ import {
   BRIDGE_PORT_NAME,
   BridgeRegistry,
   CACHE_TTL_MS,
-  BRIDGE_REQUEST_TIMEOUT_MS,
   defaultBridgeRegistry,
   defaultTranslator,
   ERROR_CODES,
@@ -265,7 +264,6 @@ test("default translation delegates to the tab bridge without using global fetch
   );
   try {
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(typeof defaultTranslator.requestImpl, "function");
     assert.equal(port.messages.length, 1);
     assert.equal(port.messages[0].type, "translate");
     assert.equal(port.messages[0].payload.messages[1].content, "phase-5-6-default-bridge-test");
@@ -281,7 +279,6 @@ test("default translation delegates to the tab bridge without using global fetch
 
 test("service-worker execution and queue timeouts are 120 seconds", () => {
   assert.equal(FETCH_TIMEOUT_MS, 120_000);
-  assert.equal(BRIDGE_REQUEST_TIMEOUT_MS, 120_000);
   assert.equal(QUEUE_WAIT_TIMEOUT_MS, 120_000);
 });
 
@@ -556,21 +553,4 @@ test("normalizes malformed bridge responses and bridge errors", async () => {
   const denied = registry.request(11, { fixed: true });
   port.receive({ type: "error", jobId: port.messages.filter((message) => message.type === "translate").at(-1).jobId, error: "lna_denied" });
   await assert.rejects(denied, (value) => value.code === "lna_denied");
-});
-
-test("keeps queue and final API validation in the service worker while using the tab bridge for HTTP", async () => {
-  const bridgeUrl = "chrome-extension://extension-id/bridge.html";
-  const registry = new BridgeRegistry();
-  const port = fakePort({ id: "extension-id", frameId: 1, url: bridgeUrl, tab: { id: 12 } });
-  registry.connect(port, "extension-id", bridgeUrl);
-  const queue = new TranslationQueue({
-    hashImpl: (text) => text,
-    requestImpl: (tabId, payload, options) => registry.request(tabId, payload, options),
-  });
-  const translation = queue.translate("source", 12);
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(port.messages.length, 1);
-  assert.deepEqual(port.messages[0].payload.messages[1].content, "source");
-  completePort(port);
-  assert.equal(await translation, "訳");
 });

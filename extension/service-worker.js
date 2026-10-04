@@ -6,7 +6,6 @@ export const CACHE_TTL_MS = 30 * 60 * 1000;
 export const BRIDGE_PORT_NAME = "discord-translate-bridge";
 export const REQUEST_PORT_NAME = "discord-translate-request";
 export const BRIDGE_CONNECT_TIMEOUT_MS = 5_000;
-export const BRIDGE_REQUEST_TIMEOUT_MS = FETCH_TIMEOUT_MS;
 export const MESSAGE_ID_PATTERN = /^chat-messages-[0-9]+-[0-9]+$/;
 
 export const ERROR_CODES = Object.freeze([
@@ -742,19 +741,17 @@ export function registerChromeListeners(
 ) {
   if (!chromeApi?.runtime?.onConnect?.addListener) return false;
 
-  if (chromeApi.runtime.onConnect?.addListener) {
-    chromeApi.runtime.onConnect.addListener((port) => {
-      if (port.name === REQUEST_PORT_NAME) {
-        connectRequestPort(port, chromeApi.runtime.id, translator);
-        return;
-      }
-      bridgeRegistry.connect(
-        port,
-        chromeApi.runtime.id,
-        chromeApi.runtime.getURL("bridge.html"),
-      );
-    });
-  }
+  chromeApi.runtime.onConnect.addListener((port) => {
+    if (port.name === REQUEST_PORT_NAME) {
+      connectRequestPort(port, chromeApi.runtime.id, translator);
+      return;
+    }
+    bridgeRegistry.connect(
+      port,
+      chromeApi.runtime.id,
+      chromeApi.runtime.getURL("bridge.html"),
+    );
+  });
 
   if (chromeApi.runtime.onInstalled?.addListener) {
     chromeApi.runtime.onInstalled.addListener((details) => {
