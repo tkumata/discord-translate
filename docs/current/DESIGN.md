@@ -5,6 +5,7 @@
 - Status: Current
 - Last reviewed: 2026-10-05
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
+- Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
 
 ## 1. 設計目的
 
@@ -187,7 +188,7 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 | `extension/content-script.js` | DOM 検出、各 message の翻訳 button、押下時だけの依頼、連打抑止、bridge iframe 1個の ON/OFF lifecycle、stale 結果破棄、手動再試行 |
 | `extension/bridge.html` | 非表示 Extension document と外部入力を持たない静的 script 入口 |
 | `extension/bridge.js` | 固定 Port job の検証、固定 localhost POST、120秒 timeout、固定result envelope |
-| `extension/styles.css` | 翻訳 button、loading、訳文、error、再試行 button の最小表示。Discord class へ依存しない |
+| `extension/styles.css` | 翻訳 button、loading、訳文、error、再試行 button の最小表示。テーマの代替配色だけDiscordのテーマclassを参照する |
 | `extension/popup.html` | `enabled` checkbox と本文なし接続状態の静的markup |
 | `extension/popup.js` | pure export 可能な有効化状態遷移、固定health GET、5秒 timeout、厳密 schema、`chrome.storage.local`同期 |
 | `extension/popup.css` | disabled checkbox と状態 code の最小 layout |
@@ -392,3 +393,78 @@ Storage API自体の遅延書込みは取消しできない。
 content scriptは表示recordをMapで保持する。
 DOM離脱とID変更は走査時にrecordと表示を削除する。
 OFF時は全recordを破棄する。
+
+## 15. 翻訳ボタンのテーマ対応（2026-10-05）
+
+状態: 2026-10-05承認・実装済み。ユーザの実機再確認で合格し、タスク完了。
+外部動作はSPEC-THEME-001を正本とする。
+
+### 実装と責務
+
+既存ボタンの配色はDiscordのCSSカスタムプロパティを参照する。
+2026-10-05、Discordの公式配布CSSをHTTPで確認した。
+旧`--text-normal`と旧hover・focus変数の定義はなかった。
+`--background-secondary-alt`の定義は残っていた。
+エージェントはユーザ環境のcomputed styleを取得していない。
+
+- `extension/styles.css`が対象ボタンの配色と操作状態を所有する。
+- Discordから継承するCSSカスタムプロパティを再利用する。
+- 通常背景は不透明な`--background-secondary-alt`を使用する。
+- 文字色は`--control-secondary-text-default`を優先する。
+- ボタン文字色が未定義の場合は、`--text-default`を使用する。
+- hover背景は不透明な`--background-surface-higher`を使用する。
+- focusの色は`--border-focus`を使用する。
+- 色変数が未定義の場合は、明暗別の固定配色を使用する。
+- 代替配色は拡張機能専用のCSSカスタムプロパティへ定義する。
+- `.theme-light`内では明色の代替配色を使用する。
+- `.theme-dark`、`.theme-darker`、`.theme-midnight`内では暗色を使用する。
+- テーマclassがない場合は、暗色の代替配色を使用する。
+- 境界線は明暗別の固定色を使用し、背景との境界を示す。
+- テーマ変更の反映にはブラウザのCSS再計算を使う。
+- `extension/content-script.js`は「再試行」に共通ボタンクラスを付けた。
+- 「再試行」の個別CSSを除去し、共通規則を適用した。
+- CSSは有効なボタンだけにhoverの配色を適用する。
+
+JavaScriptによるテーマ監視と`matchMedia`は追加しない。
+新しい依存関係、権限、テーマ設定、永続状態は追加しない。
+UIの状態遷移と翻訳要求の経路は維持する。
+文字色の代替値に`inherit`を使用しない。
+背景色の代替値に透明色を使用しない。
+
+確認元は[公式テーマCSS](https://discord.com/assets/952007.3a32a6c100854d4e.css)とする。
+公式ボタンの色参照は[公式ボタンCSS](https://discord.com/assets/146755.fd230b3ed9402884.css)で確認した。
+
+### 検証方法と確認境界
+
+実Chromeの確認はユーザが行う。
+ユーザ承認により、色変数と配色の実機確認を実装後へ分離した。
+
+- 自動検証: `npm --prefix extension test`で既存のボタン動作を確認する。
+- 構文検証: `node --check extension/content-script.js`を実行する。
+- 差分検証: `git diff --check`を実行する。
+- 実Chrome: 両テーマで全対象ボタンの通常と無効状態を確認する。
+- 実Chrome: 有効なボタンのhover、Tabによるfocus、文字のコントラストを確認する。
+- 実Chrome: ページ再読込なしで両方向のテーマ変更を確認する。
+- 実Chrome: テーマ変更後に生成したボタンの配色を確認する。
+- 実Chrome: OSとDiscordのテーマが異なる両組合せを確認する。
+- 実Chrome: テーマ変更で状態と内容が保持され、翻訳POSTが増えないことを確認する。
+
+Nodeの模擬DOMテストはCSSの描画と配色を検証しない。
+実Chromeの確認は自動検証と分けて記録する。
+
+### 検証結果
+
+- `npm --prefix extension test`: 70件成功。
+- `node --check extension/content-script.js`: 成功。
+- `git diff --check`: 成功。
+- 実Chrome受け入れ: ユーザの実機再確認報告により合格。
+
+初回の実機確認では、両テーマで全ボタンの視認性が不合格だった。
+旧文字色変数が未定義の場合に親の色を継承する実装を修正した。
+背景と文字の代替値を、明暗別の不透明な配色へ変更した。
+代替配色の通常・hoverの文字コントラスト比は9.03:1以上である。
+コントラスト比は配色値から計算し、実画面の測定とは区別する。
+今回の修正はCSSだけであり、成功済みのNode検証は繰り返していない。
+2026-10-05、ユーザは修正後の実機再確認で合格と報告した。
+ユーザの指定により、テーマ対応のタスクを完了とする。
+個別の操作状態の試験内訳とコントラストの実測値は未報告である。

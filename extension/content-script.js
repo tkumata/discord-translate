@@ -191,6 +191,7 @@ function showFailure(content, container, record, errorCode) {
   message.setAttribute("aria-live", "polite");
   const retry = document.createElement("button");
   retry.type = "button";
+  retry.className = "discord-translate-button";
   retry.textContent = "再試行";
   retry.addEventListener("click", () => requestTranslation(content, container, true));
 

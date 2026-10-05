@@ -3,6 +3,25 @@
   margin: 4px 0;
 }
 
+:root,
+.theme-dark,
+.theme-darker,
+.theme-midnight {
+  --discord-translate-button-background: #2b2d31;
+  --discord-translate-button-text: #f2f3f5;
+  --discord-translate-button-hover: #404249;
+  --discord-translate-button-border: #949ba4;
+  --discord-translate-button-focus: #00aff4;
+}
+
+.theme-light {
+  --discord-translate-button-background: #f2f3f5;
+  --discord-translate-button-text: #313338;
+  --discord-translate-button-hover: #e3e5e8;
+  --discord-translate-button-border: #80848e;
+  --discord-translate-button-focus: #006ce7;
+}
+
 .discord-translate-loading,
 .discord-translate-error {
   color: var(--text-muted, #949ba4);
@@ -12,22 +31,21 @@
 
 .discord-translate-button,
 .discord-translate-loading {
-  background: var(--background-secondary-alt, #4f545c);
-  border: 1px solid var(--background-modifier-accent, #4e5058);
+  background: var(--background-secondary-alt, var(--discord-translate-button-background));
+  border: 1px solid var(--discord-translate-button-border);
   border-radius: 3px;
-  color: var(--text-normal, #dbdee1);
+  color: var(--control-secondary-text-default, var(--text-default, var(--discord-translate-button-text)));
   cursor: pointer;
   font: inherit;
   padding: 2px 8px;
 }
 
-.discord-translate-button:hover {
-  background: var(--background-modifier-hover, #4e5058);
-  border-color: var(--interactive-hover, #b5bac1);
+.discord-translate-button:not(:disabled):hover {
+  background: var(--background-surface-higher, var(--discord-translate-button-hover));
 }
 
 .discord-translate-button:focus-visible {
-  outline: 2px solid var(--focus-primary, #00aff4);
+  outline: 2px solid var(--border-focus, var(--discord-translate-button-focus));
   outline-offset: 2px;
 }
 
@@ -61,13 +79,6 @@
   align-items: center;
   display: flex;
   gap: 8px;
-}
-
-.discord-translate-error button {
-  border: 0;
-  border-radius: 3px;
-  cursor: pointer;
-  padding: 2px 7px;
 }
 
 .discord-translate-composer {
