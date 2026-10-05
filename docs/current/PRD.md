@@ -1,7 +1,8 @@
 # PRD: Discord ローカル日本語翻訳
 
 - Status: Current product definition
-- Last reviewed: 2026-10-02
+- Last reviewed: 2026-10-05
+- Approved addition: 投稿前の英語翻訳は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - 2026-10-02: 順次表示を承認・実装済み。自動検証と実モデル検証は成功、実ChromeもユーザーのTask 5実機確認により合格・本変更完了。第11節を参照する。
 - Product maturity: Streaming manual translation implemented and tested; Task 5 Chrome acceptance confirmed by user
 
@@ -139,3 +140,23 @@ headless unpacked load、実ID preflight、実Chrome health、sender URL hotfix�
 第5節の初期streaming除外は承認済み順次表示仕様へ置き換えた。「server-side cache」の除外は製品固有の訳文 cache を意味し、公式 MLX-LM が既に持つメモリ内入力 KV cache とは区別する。2026-10-02 に異なる固定非機密英文間で 66 token の再利用を確認したため、cache 有効化の追加変更は不要である。
 
 関連: [追加要求](REQUIREMENTS.md#7-訳文の順次表示の追加要求2026-10-02)、[実装計画](../plans/active/2026-10-02-streaming-translation.md)。
+
+## 12. 投稿前の日本語から英語への翻訳案（2026-10-05）
+
+- 状態: 2026-10-05承認・実装済み。自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格し、本変更は完了。
+- 背景: 利用者は日本語で下書きを書き、英語で会話へ参加したい。
+- 課題: 外部翻訳ツールへのコピーと貼り付けが必要になる。
+- ゴール: 投稿入力欄の日本語を英語へ変換する。
+- 確定事項: 利用者が「英語に翻訳」ボタンを押す。
+- 確定事項: 拡張機能は翻訳後もメッセージを投稿しない。
+- 確定事項: 完成した英語訳を、同じ投稿入力欄の下書きへ反映する。
+- 確定事項: 利用者は英語訳を確認・編集してから、自分で投稿する。
+- 確定事項: 「元に戻す」で翻訳前の日本語の下書きへ戻す。
+- 承認済み範囲: 初期対応は通常の投稿入力欄のテキストとする。
+- 成功指標: 正常終了後も英語訳が未投稿の下書きとして残る。
+- 成功指標: 翻訳失敗や翻訳中の編集で下書きを失わない。
+- 成功指標: 英語訳を編集した後も、ボタンで翻訳前の下書きへ戻せる。
+- 対象外: 自動投稿、自動翻訳、言語選択、新しい外部サービス。
+
+詳細は [追加要求](REQUIREMENTS.md#8-投稿前の英語翻訳の追加要求案2026-10-05)を参照する。
+実装範囲は [実装計画](../plans/active/2026-10-05-compose-english-translation.md)を参照する。

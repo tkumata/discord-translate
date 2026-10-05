@@ -3,7 +3,8 @@
 2026-10-02承認の順次表示を実装済み。第12節に詳細を記載する。自動・実モデル検証は成功、実Chromeも2026-10-02のユーザーによるTask 5実機確認で合格した。入力KV cacheの実機確認結果は仕様書SPEC-KV-001を参照する。
 
 - Status: Current
-- Last reviewed: 2026-10-02
+- Last reviewed: 2026-10-05
+- Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 
 ## 1. 設計目的
 
@@ -73,7 +74,7 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 
 1. `enabled=true` の content script が候補 selector から message container、content、trim 済み本文を取得し、各メッセージへ`翻訳` button を1つ表示する。この検出・表示では要求を送らない。
 2. 利用者が `翻訳` または `再試行` を押すと、content script が `翻訳中…` へ遷移して重複押下を抑止し、要求用Portで`type`、`messageId`、`text`だけをservice workerへ1回送る。
-3. service worker が sender と入力を検証し、本文の SHA-256 key を求める。
+3. service worker が sender と入力を検証し、翻訳先と本文の SHA-256 key を求める。
 4. 同じkeyのrunning/queued jobならPromiseと途中更新を共有し、途中参加へ累積訳文を返す。有効なcacheは完成訳を返し、missならFIFO queueへ入れる。
 5. queue の先頭 1 件だけを、依頼元 tab ID に対応する検証済み bridge へ送る。
 6. bridgeが固定localhost APIへ120秒timeoutでPOSTし、SSEのJSON chunkと終端を固定envelopeで返す。
@@ -106,7 +107,7 @@ popup の health GET は LNA 許可取得に必要な例外であり、本文・
 
 ### 5.4 POST の発生条件
 
-- `翻訳`または`再試行`押下から届いた正規要求だけがservice workerのqueue/cacheへ進む。
+- `翻訳`、`再試行`、`英語に翻訳`押下から届いた正規要求だけがservice workerのqueue/cacheへ進む。
 - cache missで実行対象になったjobだけをbridgeが固定APIへPOSTする。
 - DOM検出、button生成、bridge生成、popup health GET、cache hitは翻訳POSTではない。
 
@@ -136,7 +137,7 @@ received -> cached-result
           +-> queue-timeout
 ```
 
-queueとcacheの所有者はservice workerに一意化する。unique jobはrunningを含め最大64、queue待機120秒、bridge fetchとservice worker job監督は120秒、concurrency 1とする。最大待機+実行は240秒でChromeの単一処理5分未満に収める。jobは最初の正規requestのtab IDを保持し、同一keyは同じPromiseを共有する。cache keyはtrim済み本文のSHA-256、成功訳文を最大256件・30分のmemory LRUへ保存する。service workerまたはbridge終了時はin-flightを復旧保存しない。
+queueとcacheの所有者はservice workerに一意化する。unique jobはrunningを含め最大64、queue待機120秒、bridge fetchとservice worker job監督は120秒、concurrency 1とする。最大待機+実行は240秒でChromeの単一処理5分未満に収める。jobは最初の正規requestのtab IDを保持し、同一keyは同じPromiseを共有する。cache keyは翻訳先とtrim済み本文をJSON配列へ直列化したSHA-256、成功訳文を最大256件・30分のmemory LRUへ保存する。service workerまたはbridge終了時はin-flightを復旧保存しない。
 
 `chrome.runtime.onConnect`と`chrome.runtime.onInstalled` listenerはmodule top-levelで同期登録する。event listener登録を非同期初期化の完了後へ遅らせない。global stateはworker生存中の最適化に限り、再生成されても設定以外の永続状態を要求しない。
 
@@ -170,7 +171,7 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 
 - Discord本文、system prompt、responseはファイル・DB・通常ログへ永続化しない。`invalid_response`時の4項目metadataだけはDevTools consoleへ一時出力するが、storageや外部通信へ保存・送信しない。
 - Qwen model filesとPython packagesだけをローカルcache/`.venv`へ保存する。
-- Extension cacheは実装済み・Node test合格である。trim済み本文のSHA-256をkeyに成功訳文だけをmemoryへ最大256件・30分保持し、service worker終了時に破棄する。
+- Extension cacheは実装済み・Node test合格である。翻訳先とtrim済み本文をJSON配列へ直列化したSHA-256をkeyに成功訳文だけをmemoryへ最大256件・30分保持し、service worker終了時に破棄する。
 - Extension storageへ保存する製品状態はbooleanの`enabled`だけである。
 - benchmark結果を保存する場合は固定の非機密入力だけを使い、本文を含めない。
 
@@ -262,3 +263,55 @@ stream 検証状態は本文、finish reason、usage、終端の有無を必要�
 content への progress は累積 text 方式に固定し、途中購読の追いつきとUI更新を簡単にする。生成上限 1024 token の範囲で利用し、転送量が実測で問題になる場合だけ差分方式を別判断する。DOM ブロックを token ごとに作り直さず、本文の `textContent` を更新する。
 
 翻訳用one-time `sendMessage`をPortへ置き換え済みで、旧翻訳経路の fallback は残さない。popup、Manifest、モデル、server CLI、queue 並行数と timeout は変更しない。実Chromeでの受け入れ確認は自動検証とは区別し、Task 5のユーザー報告により合格と記録する。
+
+## 13. 投稿前の英語翻訳の設計案（2026-10-05）
+
+状態: 2026-10-05承認・実装済み。自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
+外部動作はSPEC-COMPOSE-001〜005を正本とする。
+ADR-003、005、006、007の責務境界を維持する。
+新しいHTTP経路、汎用翻訳基盤、cache層は追加しない。
+
+| 所有者 | 追加する責務 |
+| --- | --- |
+| content scriptの投稿入力欄処理 | 入力欄検出、下書き抽出、ボタン、編集世代、購読、完成訳の適用、元の下書きの復元。 |
+| service worker | 下書き要求の検証、固定英語prompt、翻訳先の内部伝達、翻訳先を含むkey。 |
+| 既存bridge | 既存の固定HTTP/SSE通信を再利用する。翻訳方向の判断は追加しない。 |
+| 既存モデル | 固定英語promptによる日本語から英語への翻訳。 |
+
+受信メッセージ処理と投稿入力欄処理は別のrecordで管理する。
+投稿入力欄処理は既存content script内の独立した関数群に置く。
+Discord固有の検出・抽出・更新は投稿入力欄処理へ限定する。
+HTTP、prompt、cacheの判断を投稿入力欄処理へ移さない。
+
+投稿入力欄のrecordは対象要素、投稿先、編集世代を保持する。
+要求中は元の下書き、Port、timerをrecordへ保持する。
+本文一致だけで古い結果の適用可否を判断しない。
+編集や投稿先移動で編集世代を更新し、旧購読を解除する。
+個別の購読解除では共有jobを中止しない。
+元の下書きは一時的なmemoryだけに保持する。
+成功後は直近の翻訳前の下書き1件を復元対象として保持する。
+「元に戻す」は翻訳処理を呼ばず、保持した下書きを入力欄へ反映する。
+英語訳の反映と下書きの復元は、同じ入力欄の更新処理を使う。
+復元対象の保持・破棄はSPEC-COMPOSE-005に従う。
+複数世代の履歴や永続保存は追加しない。
+
+workerは要求種別から翻訳先を決定する。
+翻訳先はpayload生成とqueueのkey生成まで同じ値を伝える。
+日本語promptは維持し、固定英語promptだけを追加する。
+cacheと共有jobは同じ翻訳先を含むSHA-256 keyを使用する。
+bridgeとworkerの最終検証は既存処理を再利用する。
+
+入力欄の更新は合成`beforeinput`の`insertFromPaste`を使用する。
+`DataTransfer`には`text/plain`だけを格納する。
+`StaticRange`で入力欄全体を置換対象として指定する。
+Slateの編集処理へ渡し、次のイベントループで本文を照合する。
+DOMへの直接代入と非公開のReact内部操作は使用しない。
+照合に失敗した場合は固定の更新失敗メッセージを表示する。
+ユーザ承認により実Chrome確認を実装後へ分離した。
+2026-10-05のユーザ実機報告により、新機能の受け入れは合格した。
+エージェントによる実Chrome操作は未実施である。
+範囲や権限の追加が必要な場合は再承認を得る。
+
+選定根拠は[Slate Editable](https://github.com/ianstormtaylor/slate/blob/main/packages/slate-react/src/components/editable.tsx)、[Slate withDOM](https://github.com/ianstormtaylor/slate/blob/main/packages/slate-dom/src/plugin/with-dom.ts)、[Chromium InputEventInit](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/events/input_event_init.idl)を参照する。
+
+実装順序と検証範囲は [実装計画](../plans/active/2026-10-05-compose-english-translation.md)を参照する。

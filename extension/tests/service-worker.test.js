@@ -80,7 +80,7 @@ test("validates trusted sender and exact translation input", () => {
 
   assert.deepEqual(
     validateMessage({ type: "translate", messageId: "chat-messages-1-2", text: " hello " }),
-    { messageId: "chat-messages-1-2", text: "hello" },
+    { messageId: "chat-messages-1-2", text: "hello", targetLanguage: "ja" },
   );
   assert.throws(
     () => validateMessage({ type: "translate", messageId: "chat-messages-1-2", text: " " }),
@@ -109,6 +109,70 @@ test("builds the fixed non-thinking streaming payload with usage", () => {
   assert.equal(payload.stream, true);
   assert.deepEqual(payload.stream_options, { include_usage: true });
   assert.equal("model" in payload, false);
+});
+
+test("draft requests select only the fixed English prompt and retain the existing message contract", async () => {
+  assert.deepEqual(validateMessage({ type: "translateDraft", text: " 日本語 " }), {
+    text: "日本語", targetLanguage: "en",
+  });
+  for (const input of [
+    { type: "unknown", text: "日本語" },
+    { type: "translateDraft", messageId: "chat-messages-1-2", text: "日本語" },
+    { type: "translateDraft", targetLanguage: "en", text: "日本語" },
+    { type: "translateDraft", text: " " },
+    { type: "translateDraft", text: 1 },
+    { type: "translateDraft", text: "x".repeat(8001) },
+  ]) assert.throws(() => validateMessage(input), (value) => value.code === "invalid_input");
+  const japanese = buildPayload("日本語");
+  const english = buildPayload("日本語", "en");
+  assert.match(japanese.messages[0].content, /natural Japanese/);
+  assert.match(english.messages[0].content, /natural English/);
+  assert.deepEqual({ ...english, messages: japanese.messages }, japanese);
+  assert.throws(() => buildPayload("日本語", "de"), (value) => value.code === "invalid_input");
+
+  const sender = { id: "extension-id", frameId: 0, url: "https://discord.com/channels/1/2", tab: { id: 1 } };
+  const port = fakePort(sender, REQUEST_PORT_NAME);
+  const queue = new TranslationQueue({
+    requestImpl: async (tabId, payload, options) => {
+      assert.equal(tabId, 1);
+      assert.match(payload.messages[0].content, /natural English/);
+      return responseFor("English", options);
+    },
+  });
+  connectRequestPort(port, "extension-id", queue);
+  port.receive({ type: "translateDraft", text: "日本語" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(port.messages.at(-1), { type: "result", text: "訳:English" });
+});
+
+test("translation directions separate running jobs and cached results but coalesce same-direction drafts", async () => {
+  const calls = [];
+  const pending = [];
+  const queue = new TranslationQueue({
+    requestImpl: async (_tabId, payload, options) => {
+      const language = /natural English/.test(payload.messages[0].content) ? "en" : "ja";
+      calls.push(language);
+      await new Promise((resolve) => pending.push(resolve));
+      return responseFor(language, options);
+    },
+  });
+  const ja = queue.translate("same");
+  const en = queue.translate("same", 1, { targetLanguage: "en" });
+  const duplicate = queue.translate(" same ", 2, { targetLanguage: "en" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["ja"]);
+  pending.shift()();
+  assert.equal(await ja, "訳:ja");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ["ja", "en"]);
+  pending.shift()();
+  assert.equal(await en, "訳:en");
+  assert.equal(await duplicate, "訳:en");
+  assert.equal(await queue.translate("same"), "訳:ja");
+  assert.equal(await queue.translate("same", 1, { targetLanguage: "en" }), "訳:en");
+  assert.deepEqual(calls, ["ja", "en"]);
+  await assert.rejects(queue.translate("same", 1, { targetLanguage: "de" }),
+    (value) => value.code === "invalid_input");
 });
 
 test("validates response schema, finish reason, usage, and thinking markers", () => {

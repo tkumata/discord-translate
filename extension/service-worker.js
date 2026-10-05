@@ -28,6 +28,12 @@ const SYSTEM_PROMPT =
   "product names, API names, library names, identifiers, and emoji where appropriate. " +
   "Do not explain or repeat the source text.";
 
+const ENGLISH_SYSTEM_PROMPT =
+  "Translate the user's message into natural English. Output only the translation. " +
+  "Preserve line breaks, Markdown, URLs, usernames, @username, #channel, code blocks, inline code, " +
+  "product names, API names, library names, identifiers, and emoji where appropriate. " +
+  "Do not explain or repeat the source text.";
+
 export class TranslationError extends Error {
   constructor(code) {
     super(code);
@@ -99,6 +105,9 @@ export function normalizeText(text) {
 export function validateMessage(message) {
   if (!isPlainObject(message)) throw error("invalid_input");
   const keys = Object.keys(message).sort();
+  if (message.type === "translateDraft" && keys.join(",") === "text,type") {
+    return { text: normalizeText(message.text), targetLanguage: "en" };
+  }
   if (keys.length !== 3 || keys.join(",") !== "messageId,text,type") {
     throw error("invalid_input");
   }
@@ -106,14 +115,19 @@ export function validateMessage(message) {
     throw error("invalid_input");
   }
   if (!MESSAGE_ID_PATTERN.test(message.messageId)) throw error("invalid_input");
-  return { messageId: message.messageId, text: normalizeText(message.text) };
+  return { messageId: message.messageId, text: normalizeText(message.text), targetLanguage: "ja" };
 }
 
-export function buildPayload(text) {
+function validateTargetLanguage(targetLanguage) {
+  if (targetLanguage !== "ja" && targetLanguage !== "en") throw error("invalid_input");
+}
+
+export function buildPayload(text, targetLanguage = "ja") {
+  validateTargetLanguage(targetLanguage);
   const normalized = normalizeText(text);
   return {
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: targetLanguage === "en" ? ENGLISH_SYSTEM_PROMPT : SYSTEM_PROMPT },
       { role: "user", content: normalized },
     ],
     chat_template_kwargs: { enable_thinking: false },
@@ -273,6 +287,7 @@ export async function fetchTranslation(
     setTimeoutImpl = (...args) => globalThis.setTimeout(...args),
     clearTimeoutImpl = (...args) => globalThis.clearTimeout(...args),
     onProgress,
+    targetLanguage = "ja",
   } = {},
 ) {
   const controller = new AbortController();
@@ -285,7 +300,7 @@ export async function fetchTranslation(
   unrefTimer(timeout);
 
   try {
-    const payload = buildPayload(text);
+    const payload = buildPayload(text, targetLanguage);
     const response = await requestImpl(payload, {
       signal: controller.signal,
       onChunk: (chunk) => stream.push(chunk),
@@ -344,16 +359,17 @@ export class TranslationQueue {
     this.running = false;
   }
 
-  translate(text, tabId = null, { onProgress, signal } = {}) {
+  translate(text, tabId = null, { onProgress, signal, targetLanguage = "ja" } = {}) {
     let normalized;
     try {
       normalized = normalizeText(text);
+      validateTargetLanguage(targetLanguage);
     } catch (value) {
       return Promise.reject(value);
     }
 
     const promise = new Promise((resolve, reject) => {
-      this.hashQueue.push({ text: normalized, tabId, onProgress, signal, resolve, reject });
+      this.hashQueue.push({ text: normalized, targetLanguage, tabId, onProgress, signal, resolve, reject });
     });
     this.processHashQueue();
     return promise;
@@ -365,7 +381,7 @@ export class TranslationQueue {
     while (this.hashQueue.length > 0) {
       const request = this.hashQueue.shift();
       try {
-        const key = await this.hashImpl(request.text);
+        const key = await this.hashImpl(JSON.stringify([request.targetLanguage, request.text]));
         Promise.resolve(this.enqueue(key, request.text, request.tabId, request)).then(request.resolve, request.reject);
       } catch (value) {
         request.reject(value);
@@ -394,6 +410,7 @@ export class TranslationQueue {
     const job = {
       key,
       text,
+      targetLanguage: options.targetLanguage,
       tabId,
       promise,
       resolve: resolvePromise,
@@ -486,6 +503,7 @@ export class TranslationQueue {
 
   run(job) {
     fetchTranslation(job.text, {
+      targetLanguage: job.targetLanguage,
       requestImpl: (payload, options) => this.requestImpl(job.tabId, payload, options),
       logger: this.logger,
       timeoutMs: this.fetchTimeoutMs,
@@ -719,6 +737,7 @@ export function connectRequestPort(port, runtimeId, translator) {
       return;
     }
     translator.translate(validated.text, port.sender.tab.id, {
+      targetLanguage: validated.targetLanguage,
       signal: controller.signal,
       onProgress: (text) => send({ type: "progress", text }),
     }).then(

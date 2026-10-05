@@ -3,7 +3,8 @@
 2026-10-02承認のstreamingを実装済み。第12節に通信・表示の詳細と入力KV cacheの実機確認結果を記載する。実ChromeもユーザーのTask 5実機確認により合格した。
 
 - Status: Current
-- Last reviewed: 2026-10-02
+- Last reviewed: 2026-10-05
+- Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 
 ## 1. 適用範囲
 
@@ -73,6 +74,8 @@
 
 system promptは、日本語への自然な翻訳、翻訳結果のみの出力、Markdown・URL・Discord識別子・コード・製品/API/ライブラリ名・識別子・絵文字の保持、解説と原文反復の禁止を指示する。user本文はsystem promptへ連結せず、独立したuser messageに格納する。実装状態: 実装済み。
 
+下書き要求ではSPEC-COMPOSE-004の固定英語promptを使用する。
+
 ### SPEC-API-003 成功応答
 
 SSEをSPEC-STREAM-001に従って累積し、HTTP 200、非空訳文、`finish_reason=stop`、非負整数`usage.total_tokens`、reasoning/thinking不在、`[DONE]`をすべて確認した場合だけ成功とする。途中表示は成功ではなく、cacheへ保存しない。最終確定時だけ訳文をtrimする。
@@ -138,6 +141,8 @@ response受信時に対象containerがDOMから削除済み、content要素が�
 
 content scriptはlocalhostを直接fetchせず、利用者が`翻訳`または`再試行`を押したときだけ、固定名`discord-translate-request`の要求用Portで次のJSON serializableなmessageをservice workerへ1回だけ送る。Portの詳細はSPEC-STREAM-002に従う。
 
+投稿入力欄の要求はSPEC-COMPOSE-002、004の`translateDraft`に従う。
+
 ```json
 {"type":"translate","messageId":"chat-messages-<channel>-<message>","text":"<trim済み本文>"}
 ```
@@ -146,7 +151,7 @@ service workerは、`sender.id === chrome.runtime.id`、整数の`sender.tab.id`
 
 service workerはSPEC-API-001/002の固定payloadを構築し、翻訳依頼を受理したsenderのtab IDに対応する検証済みbridgeへ渡す。bridgeだけが定数`http://127.0.0.1:8080/v1/chat/completions`、`POST`、`Content-Type: application/json`、120秒timeoutでfetchする。service workerはbridge requestを既定`requestImpl`として使い、global fetchを既定経路にしない。service workerはbridgeのjob ID、envelope、HTTP statusとSPEC-API-003を最終検証し、検証済み途中textと、最終成功時のtrim済み訳文をcontent scriptへ返す。cache hitはbridgeもPOSTも使わず、同一keyのqueued/running jobは既存Promiseを共有するため、1回のbutton押下が常に新しいPOSTを意味するわけではない。
 
-翻訳サーバへのPOSTを開始できる入口は、`翻訳`または`再試行`押下から届いた正規message要求のcache missだけである。DOM走査、`MutationObserver`通知、button/bridge生成、popupのLNA bootstrap用health GET、cache hitは翻訳POSTではない。実装状態: Phase 5.6で`defaultTranslator`を検証済みbridge registryの`requestImpl`へ復旧し、既定経路がservice workerのglobal fetchを呼ばないことをNode testで確認済みである。
+翻訳サーバへのPOSTを開始できる入口は、`翻訳`、`再試行`、`英語に翻訳`の押下から届いた正規要求のcache missだけである。DOM走査、`MutationObserver`通知、button/bridge生成、popupのLNA bootstrap用health GET、cache hit、`元に戻す`は翻訳POSTではない。実装状態: Phase 5.6で`defaultTranslator`を検証済みbridge registryの`requestImpl`へ復旧し、既定経路がservice workerのglobal fetchを呼ばないことをNode testで確認済みである。
 
 service worker、content script、popupは本文・訳文・request/response body、`error.message`、要求URLを`console`へ出さず、通常logと永続storageにも保存しない。service workerは固定error codeだけを返す。SHA-256生成失敗は`hash_error`、翻訳POSTのfetchが`NotAllowedError`または`SecurityError`で拒否された場合は`lna_denied`、自身の120秒abortは`request_timeout`、その他のfetch拒否は`network_error`とする。content scriptはこの固定codeだけを表示し、未知値を`network_error`へ正規化する。popupはhealth状態の固定codeだけを扱い、本文・訳文を送受信しない。
 
@@ -187,7 +192,7 @@ service worker、content script、popupは本文・訳文・request/response bod
 - 上限: runningを含むunique job 64件。同一keyの待受callerは件数へ加えず、上限到達時の新規keyは即時`queue_full`とする。
 - queue待機期限: 120秒。開始前に超過したjobは`queue_timeout`としfetchしない。
 - 実行期限: 開始後120秒。bridgeの`AbortController`とservice workerのjob監督を同じ値に揃え、到達時は`request_timeout`とする。
-- key: `SHA-256(UTF-8(trim済み本文))`のhex。Web Cryptoを使い、本文そのものをMap keyにしない。
+- key: `SHA-256(UTF-8(JSON.stringify([翻訳先, trim済み本文])))`のhex。翻訳先は`ja`または`en`。Web Cryptoを使い、本文そのものをMap keyにしない。
 - 重複job: 同じkeyのqueued/running Promiseを共有し、server要求を1回にまとめる。
 - cache: 成功した訳文だけをmemory `Map`へ最大256件、成功時から30分保存する。hit時に末尾へ移すLRUとし、期限切れと最古entryを削除する。errorはcacheしない。
 - service worker停止・Extension reload・Chrome終了: queue、in-flight、cacheをすべて失う。本文・訳文の復旧保存は行わない。未完了の要求Portはcontent scriptで失敗表示となり、利用者が手動再試行する。
@@ -301,6 +306,7 @@ HTTP非2xx、120秒timeout、接続不能、空body、JSON/SSE不正、schema不
 ### SPEC-STREAM-002 Extension 内の通信と重複要求
 
 - content script はボタン押下時だけ、固定名 `discord-translate-request` の `runtime.Port` を開く。1つの Port で既存 shape の `{type:"translate",messageId,text}` を1回だけ受理する。Port 接続だけでは POST しない。
+- 下書き翻訳も同じPortで`{type:"translateDraft",text}`を1回だけ受理する。
 - service worker は既存の正規 Discord top frame sender/input 検証を適用する。bridge Port とは固定名・frame・URLの検証を分け、未知 Port や再要求、不正 shape を拒否する。
 - service worker から content へ送る shape は `{type:"progress",text}`、`{type:"result",text}`、`{type:"error",error}` だけとする。`progress.text` はその時点の累積訳文で、`result.text` だけが確定訳文である。Port と record が対応するため、content 側に新しい job ID を持たせない。
 - bridge は既存の検証済み Port で `{type:"chunk",jobId,payload}` を各 JSON event ごとに送り、`[DONE]` 受信後に `{type:"end",jobId}` を送る。非 200 の status と固定 error は既存 envelope を維持する。chunk で pending を完了せず、別 tab・未知 job・終端後の通知を表示へ流さない。
@@ -343,3 +349,134 @@ HTTP非2xx、120秒timeout、接続不能、空body、JSON/SSE不正、schema不
 - 入力KV cache: 初回0 token、後続7件66〜68 token。同じExtension promptと生成設定で異なる原文の再利用を再確認した。server CLI変更なし。
 - 実モデル→実装済みbridge SSE→worker queue/dedup/LRUの結合: 最初のprogress 493ms、完了2141ms、30 progress、重複/再利用を含めPOST 1回、終了後pending 0。Chrome Port部分は検証用の接続であり実Chrome検証ではない。
 - 本文・訳文は出力・保存していない。時刻はAPI/progress受信時刻で、実画面の初回描画時刻や高速化率を表さない。実ChromeのTask 5受け入れ確認は、2026-10-02のユーザー報告「問題ないです」により合格。エージェントのChrome接続は利用できず、実機確認の証拠はユーザー報告である。
+
+## 13. 投稿前の英語翻訳の仕様案（2026-10-05）
+
+状態: 2026-10-05承認・実装済み。各要求のレベルはMUSTとする。
+自動/実モデル検証は成功した。Discord実画面の機能受け入れはユーザ確認で合格した。
+要求はREQ-F-018〜025、受け入れ条件はAC-019〜025に対応する。
+英語訳の下書き反映、編集継続、「元に戻す」はユーザ指定で確定した。
+
+### SPEC-COMPOSE-001 対象とボタン
+
+- ON中は通常の投稿入力欄の近くに「英語に翻訳」を1つ表示する。
+- 対象はチャンネル、DM、スレッドの新規投稿入力欄とする。
+- 投稿済みメッセージの編集欄や検索欄は対象外とする。
+- 初期対応はプレーンテキストの下書きとする。
+- 改行、Markdown、URL、コード、Unicode絵文字を扱う。
+- メンションなどの非テキスト要素を含む下書きは変更しない。
+- 非対応の下書きではボタンを無効にし、理由を表示する。
+- 添付ファイルの追加・削除・変更は行わない。
+- 空白のみ、8,000 UTF-16コード単位超過では要求を送らない。
+- 入力上限はtrim後の本文に適用する。
+- 日本語の自動判定は追加しない。
+- ボタンは`type="button"`とし、フォーム送信を起こさない。
+- ボタンはクリックと標準のキーボード操作で利用できる。
+- 状態の案内は`role="status"`等で提供する。
+- OFFではボタンと状態表示を除去し、下書きは変更しない。
+
+対象判定と更新方法は実Chromeで確認する。
+Discordの非テキスト要素を単純な`textContent`へ平坦化しない。
+安全に更新できない入力欄ではボタンを有効にしない。
+
+候補はform内の`[role="textbox"][contenteditable="true"][data-slate-editor="true"]`とする。
+投稿済みメッセージとdialogの内部は候補から除外する。
+本文はSlateのblockとleafから抽出する。
+非テキスト要素や未知の本文構造は翻訳対象から除外する。
+
+### SPEC-COMPOSE-002 要求と生成中の動作
+
+- ボタン押下時、入力欄・投稿先・編集世代・下書きを記録する。
+- 要求本文は下書きのtrim済みテキストとする。
+- 元の下書きは空白と改行を含めて保持する。
+- 1押下で既存の要求用Portを1つ開く。
+- 要求shapeは`{type:"translateDraft",text}`とする。
+- 下書きの要求に投稿済みメッセージのIDを流用しない。
+- 生成中はボタンを「翻訳中…」にし、重複押下を抑止する。
+- 生成中も利用者は下書きを編集できる。
+- `progress`を受信しても入力欄へ部分訳を書き込まない。
+- 入力、DOM検出、有効化だけでは翻訳要求を送らない。
+
+### SPEC-COMPOSE-003 成功・失敗・古い結果
+
+- 正常な`result`だけを入力欄へ1回適用する。
+- 適用前にenabled、入力欄の接続、投稿先、編集世代を検証する。
+- 適用前に空白を含む下書き全体の一致を検証する。
+- 編集後に同じ本文へ戻した場合も、旧世代の結果を破棄する。
+- 編集、投稿先移動、入力欄交換、OFF後は購読を解除する。
+- 古い`progress`、`result`、`error`は現在の下書きへ適用しない。
+- 翻訳中に利用者が投稿した場合も、古い結果を破棄する。
+- 成功時は入力欄全体を完成した英語訳へ置き換える。
+- 置換後は入力欄で編集を続けられる状態にする。
+- 置換はDiscordの編集状態へ反映する。
+- 成功時は「元に戻す」ボタンを表示する。
+- 拡張機能は送信ボタンの押下、Enterの生成、投稿API呼び出しを行わない。
+- 利用者による通常の投稿操作は変更しない。
+- 失敗時は下書きを保持し、既存の固定error codeを表示する。
+- 失敗時は同じボタンを再度有効にし、手動再試行を受け付ける。
+- 自動再試行は行わない。
+- content側の監督期限は既存の最大240秒を維持する。
+- 終端、購読解除、切断ではPortとtimerを解放する。
+
+DOMへの`textContent`代入だけでは更新成功と扱わない。
+実Chromeで表示、編集継続、Discordの下書き状態を確認する。
+確認に使う下書きは固定の非機密テキストとする。
+
+### SPEC-COMPOSE-004 翻訳方向と共有経路
+
+- workerは既存の`translate`要求を日本語訳として受理する。
+- workerは`translateDraft`要求を英語訳として受理する。
+- 新要求はplain objectの`type`と`text`だけを許可する。
+- sender検証と1Port1要求の制限は既存の規則を適用する。
+- workerは要求種別から翻訳先`ja`または`en`を決定する。
+- 呼び出し側から任意のprompt、URL、API payloadを受け取らない。
+- 英語promptは自然な英語への翻訳と訳文だけの出力を指示する。
+- 英語promptは改行、Markdown、URL、コード、識別子、絵文字の保持を指示する。
+- user本文は独立したuser messageに格納する。
+- keyは`SHA-256(UTF-8(JSON.stringify([翻訳先, trim済み本文])))`とする。
+- keyは重複jobと訳文cacheの両方へ適用する。
+- 同じ本文でも、異なる翻訳先のjobとcacheを共有しない。
+- 同じ翻訳先と本文では既存の重複排除を維持する。
+- bridgeは既存の固定payloadとSSE通信を使用する。
+- 正常終了、usage、終端、thinking不在の最終検証を維持する。
+- queue、timeout、cache上限、モデル、生成設定は変更しない。
+- 権限、popup、サーバ、新しい依存関係は変更しない。
+- 本文と訳文の永続化禁止は下書きにも適用する。
+
+SPEC-EXT-003、SPEC-QUEUE-001、SPEC-STREAM-002へ追加仕様を同期した。
+受信メッセージの既存動作はNode testで回帰確認した。
+
+### SPEC-COMPOSE-005 「元に戻す」ボタン
+
+- 英語訳の反映後は「英語に翻訳」の近くに「元に戻す」を表示する。
+- ボタン押下時、同じ入力欄を翻訳直前の下書き全体へ戻す。
+- 空白と改行は翻訳直前の状態へ戻す。
+- 英語訳を編集した後も、ボタンで翻訳直前の下書きへ戻せる。
+- 復元時は英語訳へ加えた編集も置き換える。
+- 復元対象は直近の成功した翻訳の直前の下書き1件とする。
+- 次の翻訳が成功した場合は、復元対象を更新する。
+- 次の翻訳が失敗した場合は、以前の復元対象を保持する。
+- 翻訳中は「元に戻す」を無効にする。
+- 復元処理はDiscordの編集状態へ反映する。
+- 復元後は入力欄で編集を続けられる状態にする。
+- 復元後は「元に戻す」を除去し、復元対象を破棄する。
+- 投稿、入力欄の空化、投稿先移動、入力欄交換、OFFでは復元対象を破棄する。
+- 復元対象を破棄した場合は「元に戻す」を除去する。
+- 復元対象は同じ入力欄のmemoryだけに保持する。
+- 復元で翻訳要求や投稿操作を実行しない。
+- 復元で添付ファイルを変更しない。
+- ボタンは`type="button"`とし、標準のキーボード操作で利用できる。
+- 復元が失敗した場合は成功扱いせず、復元対象を保持する。
+
+### 検証結果と確認範囲
+
+- `npm --prefix extension test`: 58件成功。
+- `./.venv/bin/python scripts/verify.py --self-check`: 成功。
+- 変更JSの`node --check`と`git diff --check`: 成功。
+- 実モデルと既存bridge/worker処理: 英訳3ケースと日本語訳1ケース成功。
+- 英訳の固定ケース: 日常文、改行・URL・インラインコード・絵文字、コードブロック。
+- 本文と訳文は検証ログへ出力・保存していない。
+- 2026-10-05、ユーザが「新規に追加した機能は意図とおり」と実機確認を報告した。
+- 新機能の実Chrome受け入れはユーザ確認により合格とする。
+- 個別の異常系・画面別の実機試験内訳は未報告である。
+- 自動テストの編集モデルはDiscord固有のイベント処理を再現しない。

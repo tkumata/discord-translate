@@ -68,3 +68,17 @@
   cursor: pointer;
   padding: 2px 7px;
 }
+
+.discord-translate-composer {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-muted, #949ba4);
+  font-size: 0.9em;
+}
+
+.discord-translate-button:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
