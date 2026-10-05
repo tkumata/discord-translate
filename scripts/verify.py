@@ -35,7 +35,6 @@ class Case:
     name: str
     text: str
     required: tuple[str, ...] = ()
-    needs_japanese: bool = True
 
 
 CASES = (
@@ -483,7 +482,7 @@ def verify_case(
         if origin is not None and headers.get("Access-Control-Allow-Origin") != origin:
             raise ValueError("allowed CORS POST was not accepted")
     translation, _ = extract_translation(data)
-    if case.needs_japanese and not CJK.search(translation):
+    if not CJK.search(translation):
         raise ValueError("translation does not contain Japanese characters")
     for required in case.required:
         if required not in translation:

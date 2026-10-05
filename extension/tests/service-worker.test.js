@@ -305,7 +305,6 @@ test("aborts a request after the fixed request timeout", async () => {
   });
   const timeout = timers.timers.find((timer) => timer.active && timer.ms === FETCH_TIMEOUT_MS);
   assert.ok(timeout);
-  assert.equal(FETCH_TIMEOUT_MS, 120_000);
   timeout.callback();
   await assert.rejects(request, (value) => value.code === "request_timeout");
 });

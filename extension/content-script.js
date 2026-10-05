@@ -485,7 +485,7 @@ function processContainer(container) {
   showButton(content, container, record);
 }
 
-function scan(root = document) {
+function scan() {
   if (!enabled) return;
   for (const record of activeRequests) {
     if (!currentRecord(record.content, record.container, record)) {
@@ -494,12 +494,7 @@ function scan(root = document) {
       if (records.get(record.content) === record) records.delete(record.content);
     }
   }
-  const containers = [];
-  if (root instanceof Element && root.matches(MESSAGE_CONTAINER_SELECTOR)) containers.push(root);
-  if (typeof root.querySelectorAll === "function") {
-    containers.push(...root.querySelectorAll(MESSAGE_CONTAINER_SELECTOR));
-  }
-  for (const container of containers) processContainer(container);
+  for (const container of document.querySelectorAll(MESSAGE_CONTAINER_SELECTOR)) processContainer(container);
   scanComposers();
 }
 
