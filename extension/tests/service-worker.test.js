@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { handleBridgeRequest } from "../bridge.js";
+import { createReceivedTranslationCache } from "../received-translation-cache.js";
+import { storageFixture } from "./storage-fixture.js";
 import {
   BRIDGE_PORT_NAME,
   BridgeRegistry,
@@ -416,11 +418,11 @@ test("request ports validate sender/input and return only fixed outcomes", async
         options.onProgress("途");
         return "途中訳";
       },
-    });
+    }, createReceivedTranslationCache(storageFixture(), { hashImpl: sha256Hex }));
     target.receive({ type: "translate", messageId: "chat-messages-1-2", text: "source" });
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(target.messages, code ? [{ type: "error", error: code }] : [
-      { type: "progress", text: "途" }, { type: "result", text: "途中訳" },
+      { type: "progress", text: "途" }, { type: "result", text: "途中訳", cache: { saved: true, error: null } },
     ]);
     target.receive({ type: "translate", messageId: "chat-messages-1-2", text: "source" });
     assert.equal(target.messages.length, code ? 1 : 2);

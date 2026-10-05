@@ -52,7 +52,7 @@ Chrome Extensionのpopup health、service workerのqueue/cache/API検証、Disco
 - service workerによるsender/input、FIFO queue、有限timeout監督、固定payload、response最終検証と、検証済みExtension document bridgeによるlocalhost HTTP送信
 - Extensionの既定OFF toggle、現在・新規messageへの翻訳ボタン、押下時だけの翻訳要求、原文直下の訳文、再試行可能error
 - popupのhealth確認によるLNA許可取得と、成功時だけの有効化
-- concurrency 1の有限queueとmemory限定cache
+- concurrency 1の有限queue、30分のmemory cache、受信完成訳の5日間保存
 - `mlx_lm.server`とQwen MLX 4bitによるlocal translation
 - loopback、Extension origin限定CORS、offline通常運用、本文非保存
 - 固定翻訳ケース、Chrome実UI、LAN拒否、連続実行、memoryの検証
@@ -160,3 +160,23 @@ headless unpacked load、実ID preflight、実Chrome health、sender URL hotfix�
 
 詳細は [追加要求](REQUIREMENTS.md#8-投稿前の英語翻訳の追加要求案2026-10-05)を参照する。
 実装範囲は [実装計画](../plans/active/2026-10-05-compose-english-translation.md)を参照する。
+
+## 13. 受信メッセージの翻訳文を5日間保持する案（2026-10-05）
+
+- 状態: 2026-10-05承認・実装済み。Node自動検証成功。実Chrome受け入れはユーザ確認で合格。
+- 背景: ページ遷移で翻訳ブロックが失われる。
+- ゴール: 受信メッセージの完成訳を保存し、再表示時に復元する。
+- 確定事項: 保存対象は表示された受信メッセージの翻訳文とする。
+- 確定事項: 保存期間は5日間とする。
+- 確定事項: 下書きと投稿用の英語訳は永続保存しない。
+- 確定事項: 投稿用の既存30分のメモリキャッシュは維持する。
+- 承認済み: 完成訳の初回保存成功から120時間を有効期間とする。
+- 承認済み: チャンネル、DM、スレッドの既存対象メッセージに適用する。
+- 承認済み: ON中は有効な保存訳だけを自動復元する。
+- 成功指標: 遷移後の復元で翻訳APIへのPOSTが発生しない。
+
+本節は受信メッセージの完成訳に限り、永続保存禁止の例外を設ける。
+原文、下書き、途中訳、通常ログの保存禁止は維持する。
+既存機能の承認状態は変更しない。
+詳細は[追加要求](REQUIREMENTS.md#9-受信翻訳文の5日間保持案2026-10-05)を参照する。
+実装範囲は[実装計画](../plans/active/2026-10-05-received-translation-cache.md)を参照する。

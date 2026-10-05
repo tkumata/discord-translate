@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { createReceivedTranslationCache } from "../received-translation-cache.js";
+import { sha256Hex } from "../service-worker.js";
+import { storageFixture, workerFixture, waitFor } from "./storage-fixture.js";
 
 class FakeElement {
   constructor(tagName, ownerDocument = null) {
@@ -194,13 +197,25 @@ class FakeMutationObserver {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-async function loadContentScript(onMessage = () => Promise.resolve({ ok: true, text: "訳文" })) {
+async function loadContentScript(onMessage = () => Promise.resolve({ ok: true, text: "訳文" }), options = {}) {
   const source = await readFile(new URL("../content-script.js", import.meta.url), "utf8");
-  const document = new FakeDocument();
+  const document = options.document ?? new FakeDocument();
   const calls = [];
   const ports = [];
+  const lookups = [];
+  const changes = [];
   const chrome = {
+    storage: {
+      local: options.storage ?? storageFixture({ enabled: false }),
+      onChanged: { addListener(listener) { changes.push(listener); } },
+    },
     runtime: {
+      sendMessage(message, callback) {
+        lookups.push(message);
+        const result = options.lookup ? options.lookup(structuredClone(message)) : { status: "miss", error: null };
+        if (result?.then) result.then(callback, () => callback({ status: "miss", error: "cache_read_failed" }));
+        else callback(result);
+      },
       getURL: (path) => `chrome-extension://test/${path}`,
       connect: ({ name }) => {
         assert.equal(name, "discord-translate-request");
@@ -218,10 +233,11 @@ async function loadContentScript(onMessage = () => Promise.resolve({ ok: true, t
           },
           postMessage(message) {
             calls.push(message);
-            const response = onMessage(message);
+            const response = onMessage(structuredClone(message));
             if (response !== undefined) {
               Promise.resolve(response).then((value) => {
-                this.receive(value.ok ? { type: "result", text: value.text } : { type: "error", error: value.error });
+                this.receive(value.ok ? { type: "result", text: value.text, ...(value.cache ? { cache: value.cache } : {}) } :
+                  { type: "error", error: value.error });
               });
             }
           },
@@ -241,17 +257,18 @@ async function loadContentScript(onMessage = () => Promise.resolve({ ok: true, t
     setTimeout,
     clearTimeout,
     setImmediate,
-    location: { pathname: "/channels/1/2" },
+    location: { protocol: "https:", hostname: "discord.com", pathname: "/channels/1/2" },
     InputEvent: FakeInputEvent,
     DataTransfer: FakeDataTransfer,
     StaticRange: class { constructor(options) { Object.assign(this, options); } },
   };
+  if (options.initialize) { context.window = {}; context.window.top = context.window; }
   vm.createContext(context);
   vm.runInContext(
     `${source}\nthis.__testApi = { applyEnabled, scan, processContainer, requestTranslation };`,
     context,
   );
-  return { ...context, context, document, calls, ports, api: context.__testApi };
+  return { ...context, context, document, calls, ports, lookups, changes, api: context.__testApi };
 }
 
 function message(document, id, text) {
@@ -755,4 +772,159 @@ test("only new-post forms on channel routes are eligible; Slate empty blocks and
   env.api.applyEnabled(true);
   assert.equal(composerUi(c.form), undefined);
   env.api.applyEnabled(false);
+});
+
+test("saved receive translations restore after navigation, page and worker recreation without a translation POST", async () => {
+  let now = 100;
+  const storage = storageFixture({ enabled: true });
+  const createWorker = () => workerFixture(storage, { cache:
+    createReceivedTranslationCache(storage, { hashImpl: sha256Hex, now: () => now }) });
+  const firstWorker = createWorker();
+  const first = await loadContentScript(async (payload) => {
+    const response = await firstWorker.request(payload).result;
+    return { ok: response.type === "result", ...response };
+  }, { storage, lookup: (payload) => firstWorker.lookup(payload) });
+  const original = message(first.document, "chat-messages-1-2", "source");
+  first.api.applyEnabled(true);
+  await waitFor(() => ui(original.container, "button")?.disabled === false);
+  ui(original.container, "button").click();
+  await waitFor(() => ui(original.container, "translation")?.children[0].textContent === "日本語訳");
+  assert.equal(ui(original.container, "translation").children[1].textContent, "訳:source");
+  assert.equal(firstWorker.calls, 1);
+  const deadline = Object.values(storage.data).find((value) => value?.version === 1).expiresAt;
+
+  original.container.remove();
+  first.api.scan();
+  const returnView = message(first.document, "chat-messages-1-2", "source");
+  first.api.scan();
+  await waitFor(() => ui(returnView.container, "translation"));
+  assert.equal(ui(returnView.container, "translation").children[1].textContent, "訳:source");
+  assert.equal(firstWorker.calls, 1);
+  first.api.applyEnabled(false);
+
+  const recreatedWorker = createWorker();
+  const restored = await loadContentScript(() => { throw new Error("must not translate on restore"); },
+    { storage, initialize: true, document: first.document, lookup: (payload) => recreatedWorker.lookup(payload) });
+  await waitFor(() => ui(returnView.container, "translation"));
+  assert.equal(ui(returnView.container, "translation").children[0].textContent, "日本語訳");
+  assert.equal(restored.calls.length, 0);
+  assert.equal(recreatedWorker.calls, 0);
+  restored.changes[0]({ enabled: { newValue: false } }, "local");
+  assert.equal(ui(returnView.container, "translation"), undefined);
+  restored.changes[0]({ enabled: { newValue: true } }, "local");
+  await waitFor(() => ui(returnView.container, "translation"));
+  assert.equal(ui(returnView.container, "translation").lang, "ja");
+  assert.equal(Object.values(storage.data).find((value) => value?.version === 1).expiresAt, deadline);
+  ui(returnView.container, "translation").remove();
+  restored.api.scan();
+  await waitFor(() => ui(returnView.container, "translation"));
+  assert.equal(returnView.container.querySelectorAll('[data-discord-translate="translation"]').length, 1);
+  now = deadline;
+  restored.api.applyEnabled(false);
+  restored.api.applyEnabled(true);
+  await waitFor(() => ui(returnView.container, "button")?.disabled === false);
+  assert.equal(ui(returnView.container, "translation"), undefined);
+  assert.equal(ui(returnView.container, "button").disabled, false);
+  assert.equal(recreatedWorker.calls, 0);
+});
+
+test("receive lookups reject edited text, same-text other messages and reply previews", async () => {
+  const storage = storageFixture();
+  const worker = workerFixture(storage);
+  await worker.request({ type: "translate", messageId: "chat-messages-1-2", text: "source" }).result;
+  const env = await loadContentScript(undefined, { lookup: (payload) => worker.lookup(payload) });
+  const edited = message(env.document, "chat-messages-1-2", "edited");
+  const other = message(env.document, "chat-messages-1-3", "source");
+  const reply = env.document.createElement("div");
+  reply.id = "message-content-2";
+  reply.textContent = "source";
+  other.container.children.unshift(reply);
+  reply.parentNode = other.container;
+  env.api.applyEnabled(true);
+  await flush();
+  assert.equal(ui(edited.container, "translation"), undefined);
+  assert.equal(ui(other.container, "translation"), undefined);
+  assert.deepEqual(env.lookups.map((payload) => payload.messageId), ["chat-messages-1-2", "chat-messages-1-3"]);
+  assert.equal(env.calls.length, 0);
+  assert.equal(worker.calls, 1);
+});
+
+test("late lookups are discarded on OFF, edit, DOM replacement, removal and message identity changes", async () => {
+  for (const change of ["off", "edit", "replace", "remove", "id", "invalid-id"]) {
+    const pending = [];
+    const env = await loadContentScript(undefined, { lookup: () => new Promise((resolve) => pending.push(resolve)) });
+    const { container, content } = message(env.document, "chat-messages-1-2", "source");
+    env.api.applyEnabled(true);
+    env.api.scan();
+    assert.equal(env.lookups.length, 1);
+    assert.equal(ui(container, "button").disabled, true);
+    if (change === "off") env.api.applyEnabled(false);
+    if (change === "edit") content.textContent = "edited";
+    if (change === "replace") {
+      const replacement = env.document.createElement("div");
+      replacement.id = content.id;
+      replacement.textContent = "source";
+      content.replaceWith(replacement);
+    }
+    if (change === "remove") container.remove();
+    if (change === "id") container.id = "chat-messages-3-2";
+    if (change === "invalid-id") container.id = "unrelated";
+    env.api.scan();
+    pending[0]({ status: "hit", text: "古い訳", error: null });
+    await flush();
+    assert.equal(ui(container, "translation"), undefined, change);
+    assert.equal(env.calls.length, 0);
+    if (change === "invalid-id") assert.equal(ui(container), undefined);
+    env.api.applyEnabled(false);
+  }
+});
+
+test("completed translations are removed when a reused container changes identity", async () => {
+  const env = await loadContentScript(undefined, { lookup: () => ({ status: "hit", text: "訳", error: null }) });
+  const { container } = message(env.document, "chat-messages-1-2", "source");
+  env.api.applyEnabled(true);
+  assert.ok(ui(container, "translation"));
+  container.id = "unrelated";
+  env.api.scan();
+  assert.equal(ui(container), undefined);
+});
+
+test("storage read failures and timeout allow manual translation; write failures retain the completed text", async () => {
+  const env = await loadContentScript(() => ({ ok: true, text: "完成訳", cache: { saved: false, error: "cache_write_failed" } }),
+    { lookup: () => ({ status: "miss", error: "cache_read_failed" }) });
+  const { container, content } = message(env.document, "chat-messages-1-2", "source");
+  env.api.applyEnabled(true);
+  assert.match(ui(container, "cache-warning").textContent, /cache_read_failed/);
+  ui(container, "button").click();
+  await flush();
+  assert.equal(ui(container, "translation").children[1].textContent, "完成訳");
+  assert.match(ui(container, "cache-warning").textContent, /翻訳文を保存できませんでした（cache_write_failed）/);
+  assert.equal(container.querySelectorAll('[data-discord-translate="cache-warning"]').length, 1);
+  assert.equal(content.textContent, "source");
+  assert.equal(ui(container, "error"), undefined);
+
+  const pending = await loadContentScript(undefined, { lookup: () => new Promise(() => {}) });
+  let timer;
+  pending.context.setTimeout = (callback, ms) => { timer = { callback, ms }; return timer; };
+  pending.context.clearTimeout = () => {};
+  const next = message(pending.document, "chat-messages-1-2", "source");
+  pending.api.applyEnabled(true);
+  assert.equal(timer.ms, 5000);
+  timer.callback();
+  assert.match(ui(next.container, "cache-warning").textContent, /cache_read_failed/);
+  assert.equal(ui(next.container, "button").disabled, false);
+  assert.equal(pending.calls.length, 0);
+  pending.api.applyEnabled(false);
+});
+
+test("malformed cache responses never render and corrupted result metadata keeps retry available", async () => {
+  const env = await loadContentScript(() => undefined, { lookup: () => ({ status: "hit", text: "bad", error: null, extra: true }) });
+  const { container } = message(env.document, "chat-messages-1-2", "source");
+  env.api.applyEnabled(true);
+  assert.equal(ui(container, "translation"), undefined);
+  assert.match(ui(container, "cache-warning").textContent, /cache_read_failed/);
+  ui(container, "button").click();
+  env.ports[0].receive({ type: "result", text: "bad", cache: { saved: true, error: "private details" } });
+  assert.equal(ui(container, "translation"), undefined);
+  assert.match(ui(container, "error").textContent, /invalid_response/);
 });

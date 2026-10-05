@@ -47,7 +47,7 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 | コンポーネント | 所有する責務 | 所有しない責務 | 状態 |
 | ------------ | ---------- | -------------| --- |
 | Discord content script | 対象メッセージ検出、各メッセージの手動翻訳 UI、押下・連打抑止・stale 結果破棄、service worker への依頼、ON 中の bridge iframe 1個の lifecycle | HTTP、payload、Port job、model | 順次表示は実装・Node test済み、Task 5実Chrome確認合格（ユーザー報告） |
-| Extension service worker | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・stream検証・累積・購読・最終応答検証、`invalid_response` 診断、重複排除、memory cache、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化 | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
+| Extension service worker | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・stream検証・累積・購読・最終応答検証、`invalid_response` 診断、重複排除、memory cache、受信完成訳の永続保存と検索、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化 | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
 | Extension document bridge | 検証済み Port、固定 localhost URL への 120秒 POST、SSE解析・chunk/end通知、HTTP 200 SSE不正時の`invalid_response`診断 | page message、任意 URL/payload、queue/cache、最終 API schema、storage | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
 | Extension popup | 全 Discord タブ共通の`enabled` 状態遷移、LNA prompt を trigger する固定 `/health` GET、5秒 timeout、厳密 health 検証、本文なし状態 code 表示 | Discord DOM、翻訳本文、chat completion、queue/cache | 実装済み・Node test 合格・実 Chrome health 成功 |
 | `scripts/start-server.sh` | 起動入力検証、loopback/CORS/offline/concurrency/log 設定、server exec | HTTP API 再実装、request 内容検証、cache | 実装済み |
@@ -139,11 +139,11 @@ received -> cached-result
 
 queueとcacheの所有者はservice workerに一意化する。unique jobはrunningを含め最大64、queue待機120秒、bridge fetchとservice worker job監督は120秒、concurrency 1とする。最大待機+実行は240秒でChromeの単一処理5分未満に収める。jobは最初の正規requestのtab IDを保持し、同一keyは同じPromiseを共有する。cache keyは翻訳先とtrim済み本文をJSON配列へ直列化したSHA-256、成功訳文を最大256件・30分のmemory LRUへ保存する。service workerまたはbridge終了時はin-flightを復旧保存しない。
 
-`chrome.runtime.onConnect`と`chrome.runtime.onInstalled` listenerはmodule top-levelで同期登録する。event listener登録を非同期初期化の完了後へ遅らせない。global stateはworker生存中の最適化に限り、再生成されても設定以外の永続状態を要求しない。
+`chrome.runtime.onConnect`、`chrome.runtime.onMessage`と`chrome.runtime.onInstalled` listenerはmodule top-levelで同期登録する。event listener登録を非同期初期化の完了後へ遅らせない。global stateはworker生存中の最適化に限り、再生成後の受信完成訳はStorage APIから検索する。
 
 ### 6.3 UI 設定
 
-`enabled`だけを`chrome.storage.local`のsource of truthとする。install時の既定値はfalseで、update時に既存値を上書きしない。OFF→checking→ON/OFFの判断はpopupのpure export可能な状態遷移へ分離し、fetchとStorage APIは境界として注入可能にする。popup、content scriptはStorage API経由で読み、content scriptは`chrome.storage.onChanged`でON/OFFを反映する。本文、訳文、job、cacheはstorageへ保存しない。
+UI設定の`enabled`は`chrome.storage.local`をsource of truthとする。install時の既定値はfalseで、update時に既存値を上書きしない。OFF→checking→ON/OFFの判断はpopupのpure export可能な状態遷移へ分離し、fetchとStorage APIは境界として注入可能にする。popup、content scriptはStorage API経由で読み、content scriptは`chrome.storage.onChanged`でON/OFFを反映する。原文、投稿用の訳文、未完了jobはstorageへ保存しない。受信完成訳は第14節に従って保存する。
 
 メッセージUIの最小状態は`翻訳`、`翻訳中…`、`日本語訳（翻訳中…）`、`日本語訳`、`固定error code + 再試行`である。状態所有者はcontent scriptの対象content nodeごとのrecordとし、`翻訳中…`ではbuttonをdisabledにする。本文変更またはDOM差し替えで旧recordを表示対象から外し、ON中の新本文には新しい`翻訳`を1つ作る。OFFではobserver、bridge、すべての挿入UIとrecordを破棄し、新規要求を作らない。
 
@@ -172,7 +172,7 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 - Discord本文、system prompt、responseはファイル・DB・通常ログへ永続化しない。`invalid_response`時の4項目metadataだけはDevTools consoleへ一時出力するが、storageや外部通信へ保存・送信しない。
 - Qwen model filesとPython packagesだけをローカルcache/`.venv`へ保存する。
 - Extension cacheは実装済み・Node test合格である。翻訳先とtrim済み本文をJSON配列へ直列化したSHA-256をkeyに成功訳文だけをmemoryへ最大256件・30分保持し、service worker終了時に破棄する。
-- Extension storageへ保存する製品状態はbooleanの`enabled`だけである。
+- Extension storageへ保存する製品状態は`enabled`と受信完成訳の永続キャッシュである。
 - benchmark結果を保存する場合は固定の非機密入力だけを使い、本文を含めない。
 
 ## 9. Extension実装単位
@@ -183,6 +183,7 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `extension/manifest.json` | MV3、Discord content script、module service worker、popup、`storage`、loopback host permission |
 | `extension/service-worker.js` | sender/input/Port 検証、固定 payload、FIFO queue、重複 Promise、memory LRU、bridge registryを使う既定job 配線、120秒 job 監督、HTTP/response 最終検証 |
+| `extension/received-translation-cache.js` | 受信完成訳の個別キー保存、5日期限、検索、期限切れ削除、Storage API操作の直列化と5秒監督。 |
 | `extension/content-script.js` | DOM 検出、各 message の翻訳 button、押下時だけの依頼、連打抑止、bridge iframe 1個の ON/OFF lifecycle、stale 結果破棄、手動再試行 |
 | `extension/bridge.html` | 非表示 Extension document と外部入力を持たない静的 script 入口 |
 | `extension/bridge.js` | 固定 Port job の検証、固定 localhost POST、120秒 timeout、固定result envelope |
@@ -192,6 +193,7 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 | `extension/popup.css` | disabled checkbox と状態 code の最小 layout |
 | `extension/package.json` | Node に ES module として test 対象を解釈させる`{"type":"module","private":true}` だけ。依存なし |
 | `extension/tests/service-worker.test.js` | Node 標準`node:test` による既定 bridge 配線、global fetch 不使用、120秒 timeout、sender URL 境界、input、payload、SHA-256/error 分類、response、FIFO、上限、重複、cache の回帰検査 |
+| `extension/tests/received-translation-cache.test.js` | worker再生成、5日期限、容量不足、削除失敗、読取り専用検索、投稿用翻訳の保存除外。 |
 | `extension/tests/popup.test.js` | Node 標準`node:test`によるhealth成功、拒否、timeout、network、HTTP、schema、OFF 遷移の回帰検査 |
 | `extension/tests/bridge.test.js` | 固定 URL/payload、120秒timeout、network、HTTP/JSON envelope、任意入力拒否の回帰検査 |
 | `extension/tests/content-script.test.js` | scan だけでは要求なし、各message 1 button、クリック1回1要求、連打抑止、成功/失敗/再試行、OFF、本文変更・DOM差し替え時のstale破棄をNode標準`node:test`で検証 |
@@ -315,3 +317,78 @@ DOMへの直接代入と非公開のReact内部操作は使用しない。
 選定根拠は[Slate Editable](https://github.com/ianstormtaylor/slate/blob/main/packages/slate-react/src/components/editable.tsx)、[Slate withDOM](https://github.com/ianstormtaylor/slate/blob/main/packages/slate-dom/src/plugin/with-dom.ts)、[Chromium InputEventInit](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/events/input_event_init.idl)を参照する。
 
 実装順序と検証範囲は [実装計画](../plans/active/2026-10-05-compose-english-translation.md)を参照する。
+
+## 14. 受信翻訳専用の永続キャッシュ案（2026-10-05）
+
+状態: 2026-10-05承認・実装済み。Node自動検証成功。実Chrome受け入れはユーザ確認で合格。
+外部動作はSPEC-CACHE-001〜004を正本とする。
+第6節、第8節の永続状態を受信完成訳だけに拡張した。
+判断は[ADR-008](../adr/008-persist-received-translations.md)に記載する。
+
+### 責務
+
+| 所有者 | 追加する責務 |
+| --- | --- |
+| content script | 表示メッセージの検索、IDの保持、非同期結果の失効、完成訳の復元。 |
+| service workerの受信要求処理 | 検索要求の検証、受信完成訳の保存、保存状態の返却。 |
+| 受信翻訳専用の保存処理 | キー、保存値、5日期限、期限切れ削除、Storage APIの境界。 |
+| 既存TranslationQueue | 既存の翻訳、重複排除、30分のメモリキャッシュを維持する。 |
+| 既存bridge・モデル・投稿入力欄処理 | 永続キャッシュの責務を追加しない。 |
+
+保存処理はworkerから使う独立した関数群とする。
+汎用cache framework、repository interface、新依存は作らない。
+時計とStorage APIは既存のテスト方式で差し替え可能にする。
+
+### データと競合
+
+保存キーは`receivedTranslation:v1:<messageId>:<sourceHash>`とする。
+`sourceHash`は既存の`SHA-256(JSON.stringify(["ja", text.trim()]))`とする。
+メッセージIDにはチャンネルIDとメッセージIDが含まれる。
+保存値は`{version:1,text,savedAt,expiresAt}`とする。
+workerは保存値の版、文字列、有限の時刻、有効期限を検証する。
+別メッセージの保存は別キーの書込みとする。
+キャッシュ全体のread-modify-writeは使用しない。
+同じキーの保存はworker内で直列化し、有効な既存期限を維持する。
+期限切れ削除と保存はworker内で競合しない順序にする。
+同文であっても別IDのメッセージは自動復元の対象にしない。
+
+### 経路
+
+1. content scriptは表示本文とメッセージIDをrecordへ保持する。
+2. content scriptは保存訳の検索だけをworkerへ依頼する。
+3. workerはIDと原文hashに対応する有効な完成訳を取得する。
+4. content scriptは現在のrecordと本文とIDを照合する。
+5. hitの場合は、content scriptが既存の完成訳UIで復元する。
+6. missの場合は、content scriptが手動翻訳ボタンを表示する。
+
+手動翻訳は既存queueとbridgeを使う。
+workerは有効な受信購読へ完成結果を返す前に保存を試みる。
+保存失敗は完成訳と分けて返し、翻訳成功を失敗へ置換しない。
+保存開始前に購読が解除された場合は、永続保存を行わない。
+保存開始後のページ移動では、保存を取り消さない。
+content scriptは保存中の遅延応答にも既存の失効判定を適用する。
+検索は翻訳要求用Portとは区別した読取り専用messageで扱う。
+workerのlistenerは既存どおり同期登録する。
+
+### 保存境界
+
+`chrome.storage.local`の専用prefixだけを受信保存処理が扱う。
+content scriptは保存訳を直接読み書きしない。
+既存の`enabled`読取りと変更通知は維持する。
+保存訳を`storage.sync`、server、通常ログへ複製しない。
+256件の既存LRU制限は5日間の永続領域へ適用しない。
+容量上限に達した場合はSPEC-CACHE-004の保存失敗を返す。
+worker再生成後はストレージから検索し、memory復旧を前提にしない。
+期限切れ削除のための常駐処理や`alarms`権限は追加しない。
+
+実装単位と検証は[実装計画](../plans/active/2026-10-05-received-translation-cache.md)に記載する。
+
+保存処理は`extension/received-translation-cache.js`へ分離した。
+Storage APIの操作はworker内で直列化する。
+各操作の呼出側は5秒で失敗を受け取る。
+Storage API自体の遅延書込みは取消しできない。
+操作が未完了の場合は、後続操作の順序を維持する。
+タイムアウト済みの操作は、後続の書込みを開始しない。
+content scriptは表示recordをMapで保持する。
+DOM離脱とID変更は走査時にrecordと表示を削除する。
+OFF時は全recordを破棄する。

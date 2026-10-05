@@ -1,3 +1,5 @@
+import { createReceivedTranslationCache } from "./received-translation-cache.js";
+
 export const FETCH_TIMEOUT_MS = 120_000;
 export const QUEUE_WAIT_TIMEOUT_MS = 120_000;
 export const MAX_UNIQUE_JOBS = 64;
@@ -696,7 +698,7 @@ export class BridgeRegistry {
   }
 }
 
-export function connectRequestPort(port, runtimeId, translator) {
+export function connectRequestPort(port, runtimeId, translator, receivedCache) {
   if (port?.name !== REQUEST_PORT_NAME || !validateSender(port.sender, runtimeId)) {
     port?.disconnect?.();
     return false;
@@ -741,7 +743,15 @@ export function connectRequestPort(port, runtimeId, translator) {
       signal: controller.signal,
       onProgress: (text) => send({ type: "progress", text }),
     }).then(
-      (text) => finish({ type: "result", text }),
+      async (text) => {
+        if (closed) return;
+        if (validated.targetLanguage === "en") {
+          finish({ type: "result", text });
+          return;
+        }
+        const cache = await receivedCache.save(validated, text, { signal: controller.signal });
+        finish({ type: "result", text, cache });
+      },
       (value) => finish({ type: "error", error: toErrorCode(value) }),
     );
   });
@@ -757,12 +767,13 @@ export function registerChromeListeners(
   chromeApi = globalThis.chrome,
   translator = defaultTranslator,
   bridgeRegistry = defaultBridgeRegistry,
+  receivedCache = createReceivedTranslationCache(chromeApi?.storage?.local, { hashImpl: sha256Hex }),
 ) {
   if (!chromeApi?.runtime?.onConnect?.addListener) return false;
 
   chromeApi.runtime.onConnect.addListener((port) => {
     if (port.name === REQUEST_PORT_NAME) {
-      connectRequestPort(port, chromeApi.runtime.id, translator);
+      connectRequestPort(port, chromeApi.runtime.id, translator, receivedCache);
       return;
     }
     bridgeRegistry.connect(
@@ -771,6 +782,26 @@ export function registerChromeListeners(
       chromeApi.runtime.getURL("bridge.html"),
     );
   });
+
+  chromeApi.runtime.onMessage.addListener((message, sender, respond) => {
+    if (message?.type !== "lookupTranslation") return false;
+    if (!validateSender(sender, chromeApi.runtime.id)) {
+      respond({ status: "miss", error: "invalid_sender" });
+      return false;
+    }
+    let validated;
+    try {
+      if (!isPlainObject(message)) throw error("invalid_input");
+      validated = validateMessage({ ...message, type: "translate" });
+    }
+    catch {
+      respond({ status: "miss", error: "invalid_input" });
+      return false;
+    }
+    void receivedCache.lookup(validated).then(respond);
+    return true;
+  });
+  void receivedCache.cleanup();
 
   if (chromeApi.runtime.onInstalled?.addListener) {
     chromeApi.runtime.onInstalled.addListener((details) => {

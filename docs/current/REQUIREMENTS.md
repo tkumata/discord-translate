@@ -32,7 +32,7 @@
 | REQ-F-008 | 既存の `/health` で HTTP サーバ状態を確認し、実 chat completion で model readiness を確認できること。 | 実装済み・実機検証済み。 |
 | REQ-F-009 | Chrome content scriptは利用者の`翻訳`または`再試行`押下時だけservice workerへ翻訳を依頼し、service workerがsender/input、固定payload、queue/cache、最終応答を所有すること。localhostへの翻訳HTTP送信だけは、同じDiscord tab内の検証済みExtension document bridgeへ委譲すること。popupはLNA許可取得用の`/health`確認だけを行える。 | 実装済み・Node test合格・実Chrome検証済み。 |
 | REQ-F-010 | Chrome Extension 側が受け付け順の有限 queue を所有し、初期同時実行数を1にすること。 | 実装済み。concurrency 1、最大64 unique job、queue待機120秒をNode testで検証済み。 |
-| REQ-F-011 | Chrome Extension 側で翻訳キャッシュを所有し、サーバ側には初期段階でキャッシュを追加しないこと。 | 実装済み。memory cache 256件・30分をNode testで検証済み。サーバ側 cache は追加していない。 |
+| REQ-F-011 | Chrome Extension 側で翻訳キャッシュを所有し、サーバ側には初期段階でキャッシュを追加しないこと。 | 実装済み。memory cache 256件・30分と受信完成訳の5日間保存をNode testで検証済み。受信保存の実Chrome受け入れはユーザ確認で合格。サーバ側 cache は追加していない。 |
 | REQ-F-012 | 押下後は`翻訳中…`として重複押下を抑止すること。bridge fetchとservice worker job監督は120秒の有限timeoutで一致させ、超過時は`request_timeout`とすること。生成中から原文直下の訳文を更新し、成功時に確定し、失敗時は部分訳を除去して原文を残してservice workerの固定error codeと`再試行`を表示すること。本文変更・DOM差し替え時は古い結果を破棄し、新本文用の`翻訳`へ戻すこと。 | 実装・Node test済み。旧方式は実Chrome確認済み。順次表示もTask 5で合格（2026-10-02ユーザー報告）。 |
 | REQ-F-013 | 基本機能と結合検証が完了した後、macOS ログイン時に `launchd` で自動起動できること。 | 未実装。 |
 | REQ-F-014 | popupでOFFからONへ切り替えるとき、Extension documentから固定`/health`へ接続してChromeのLocal Network Access許可を取得し、health成功時だけ`enabled=true`へ遷移すること。 | 実装済み・Node test合格・実Chrome正常系/異常系検証済み。 |
@@ -84,7 +84,7 @@
 | AC-011 | model load、first/warm latency、tokens/sec、RSSを同一条件で記録し、固定翻訳ケースと合わせて採用modelを説明できる。 | REQ-N-009, REQ-N-011 | SPEC-PERF-001 | 一部測定済み。load・first/warm分離・比較modelは未測定 |
 | AC-012 | 日本語、スラング、複数文、技術Discord文を目視し、意味保持と自然さを確認する。 | REQ-F-004, REQ-F-005 | SPEC-TR-001 | 日本語固定1ケースと実IDの一部固定caseは成功。Markdown/URL条件は未合格、目視品質は未検証 |
 | AC-013 | 新規project-local venvへ固定依存を導入し、modelを環境変数で選び、1コマンド起動、health/readiness、停止、再起動が成功する。 | REQ-F-006, REQ-F-007, REQ-F-008, REQ-N-006 | SPEC-SRV-001, SPEC-SRV-002, SPEC-API-004 | Qwen3-8B-4bitで合格 |
-| AC-014 | Extensionが30分・最大256件のmemory cacheを所有し、同一正規化本文の重複要求をserverへ再送せず、本文・訳文を永続化せず、server側に製品cacheを追加しない。 | REQ-F-011 | SPEC-QUEUE-001 | Nodeのcache hit、LRU、TTL、dedupeと実Chrome storage/log検証合格 |
+| AC-014 | Extensionが30分・最大256件のmemory cacheを所有し、同一正規化本文の重複要求をserverへ再送せず、原文と投稿用の訳文を永続保存せず、server側に製品cacheを追加しない。受信完成訳だけはSPEC-CACHE-001〜004で5日間保存する。 | REQ-F-011 | SPEC-QUEUE-001 | Node自動検証合格。受信保存の実Chrome受け入れはユーザ確認で合格。 |
 | AC-015 | OFF→ON時はpopupが接続確認中となり、LNA許可後の`GET http://127.0.0.1:8080/health`が5秒以内にHTTP 200かつ厳密な`{"status":"ok"}`を返した場合だけONになる。拒否・timeout・network・HTTP・schema失敗ではOFFを維持して固定codeを表示し、ON→OFFはhealthなしで即時反映する。 | REQ-F-014, REQ-N-010 | SPEC-EXT-001, SPEC-EXT-004 | popup・Node test・実Chrome health/翻訳/error code検証合格 |
 | AC-016 | 正規Discord top tabの検証済みbridgeだけがservice worker構築payloadを固定APIへ送信し、serverでbrowser由来`POST`を観測できる。既定経路はservice workerのglobal fetchを呼ばない。別tab、別URL、top frame、重複Port、不正envelope、page messageではfetchせず、OFF・unload・disconnectは固定errorで終了する。 | REQ-F-009, REQ-F-015, REQ-N-001, REQ-N-003, REQ-N-010 | SPEC-EXT-003〜005, SPEC-SEC-002 | 既定bridge配線とglobal fetch不使用を含むNode test合格・実Chrome動作確認済み |
 
@@ -174,3 +174,57 @@ Node test 58件とPython self-checkは成功した。
 新機能の実Chrome受け入れはユーザ確認により合格とする。
 個別の異常系・画面別の実機試験内訳は未報告である。
 実装順序は [実装計画](../plans/active/2026-10-05-compose-english-translation.md)を参照する。
+
+## 9. 受信翻訳文の5日間保持案（2026-10-05）
+
+状態: 2026-10-05承認・実装済み。Node自動検証成功。実Chrome受け入れはユーザ確認で合格。
+本節以外の既存機能の承認状態は変更しない。
+AC-014の永続保存禁止に、受信完成訳の例外を設ける。
+MUSTは必須、SHOULDは推奨、MAYは任意を表す。
+
+### 確定事項
+
+- 利用者は、表示された受信メッセージの翻訳文を5日間保持したい。
+- 利用者は、投稿入力欄の下書きと英語訳を永続保存しない。
+- 利用者は、投稿用の既存30分のメモリキャッシュを維持する。
+
+### 承認済み追加要求
+
+| ID | レベル | 要求 |
+| --- | --- | --- |
+| REQ-F-026 | MUST | 受信メッセージの検証済み完成訳だけを端末内に保存する。 |
+| REQ-F-027 | MUST | 正常保存済みの完成訳を、初回保存成功から120時間保持する。 |
+| REQ-F-028 | MUST | ON中は表示メッセージに一致する有効な保存訳を自動復元する。 |
+| REQ-F-029 | MUST | メッセージIDと原文のハッシュで保存訳を照合する。 |
+| REQ-F-030 | MUST | 保存訳の検索と復元では翻訳APIを呼ばない。 |
+| REQ-F-031 | MUST | 下書き、投稿用の英語訳、原文、途中訳、失敗結果を永続保存しない。 |
+| REQ-F-032 | MUST | OFF、編集、DOM交換、ID変更後に旧検索結果を表示しない。 |
+| REQ-N-012 | MUST | 保存失敗を固定codeで表示し、完成訳と原文を保持する。 |
+| REQ-N-013 | MUST | 有効期間内の保存訳を件数制限やLRUで早期削除しない。 |
+
+REQ-N-001〜010の既存通信・ログ・権限の境界を維持する。
+5日間の保存は受信翻訳専用とし、既存メモリキャッシュと分ける。
+復元時に保存期限を延長しない。
+保存できなかった完成訳の5日間保持は保証しない。
+期限切れデータは直ちに復元対象から外す。
+期限切れデータの物理削除は次のworker起動または保存操作で行う。
+
+### 承認済み受け入れ条件
+
+| ID | 受け入れ条件 | 追跡 |
+| --- | --- | --- |
+| AC-026 | チャンネル、DM、スレッドで遷移後に完成訳が復元される。再読込とworker再生成後も復元される。復元によるPOSTは0件である。 | REQ-F-026〜028、030、SPEC-CACHE-001〜003 |
+| AC-027 | 保存から120時間未満は復元される。120時間以上は復元されない。復元やOFF/ONで期限が延びない。有効な保存訳を早期削除しない。 | REQ-F-027、REQ-N-013、SPEC-CACHE-002 |
+| AC-028 | 編集後、同文の別メッセージ、返信プレビューへ旧訳を表示しない。検索中のOFF、DOM交換、ID変更で旧結果を破棄する。 | REQ-F-029、032、SPEC-CACHE-003 |
+| AC-029 | 下書きと投稿用の英語訳は保存されない。途中失敗と保存開始前に購読を解除した受信要求も保存されない。既存メモリキャッシュと共有jobは維持される。 | REQ-F-031、SPEC-CACHE-001 |
+| AC-030 | 容量不足や書込み失敗でも完成訳を表示する。保存失敗を固定codeで通知する。読込み失敗から手動翻訳へ進める。本文や訳文をログに出さない。 | REQ-N-012、SPEC-CACHE-004 |
+| AC-031 | 複数タブで別メッセージを同時に保存しても更新を失わない。原文は永続保存されない。保存先は同期されない端末内領域である。 | REQ-F-026、031、SPEC-CACHE-001、DESIGN第14節 |
+
+実装と検証の範囲は[実装計画](../plans/active/2026-10-05-received-translation-cache.md)に記載する。
+
+AC-026〜031の自動検証はNode test 70件で成功した。
+2026-10-05、ユーザはページ遷移後の訳文復元を実Chromeで確認した。
+新機能の受け入れはユーザ報告により合格とする。
+個別の画面と異常系の実機試験内訳は未報告である。
+実時間5日経過の確認は未実施である。
+5日期限は時計差替えによる境界テストで確認した。

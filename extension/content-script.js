@@ -3,6 +3,7 @@ const MESSAGE_CONTENT_SELECTOR = '[id^="message-content-"]';
 const MESSAGE_ID_PATTERN = /^chat-messages-[0-9]+-[0-9]+$/;
 const CONTENT_ID_PATTERN = /^message-content-[0-9]+$/;
 const MAX_TEXT_LENGTH = 8000;
+const CACHE_ERROR_CODES = new Set(["cache_read_failed", "cache_write_failed", "cache_cleanup_failed"]);
 const COMPOSER_SELECTOR = '[role="textbox"][contenteditable="true"][data-slate-editor="true"]';
 const BRIDGE_SELECTOR = 'iframe[data-discord-translate-bridge="true"]';
 const TRANSLATION_ERROR_CODES = new Set([
@@ -21,7 +22,7 @@ const TRANSLATION_ERROR_CODES = new Set([
 
 let enabled = false;
 let observer = null;
-let records = new WeakMap();
+let records = new Map();
 let bridge = null;
 const activeRequests = new Set();
 const composers = new Map();
@@ -88,6 +89,8 @@ function normalizedContent(content) {
 
 function removeRecordUi(record) {
   if (record?.ui?.isConnected) record.ui.remove();
+  record?.warning?.remove();
+  if (record) record.warning = null;
   if (record) record.ui = null;
 }
 
@@ -105,7 +108,9 @@ function currentRecord(content, container, record) {
     records.get(content) === record &&
     container.isConnected &&
     content.isConnected &&
+    container.id === record.messageId &&
     container.contains(content) &&
+    findMessageContent(container) === content &&
     content.textContent.trim() === record.text
   );
 }
@@ -129,14 +134,15 @@ function showButton(content, container, record) {
   element.type = "button";
   element.dataset.discordTranslate = "button";
   element.className = "discord-translate-button";
-  element.textContent = "翻訳";
+  element.disabled = record.state === "lookup";
+  element.textContent = record.state === "lookup" ? "確認中…" : "翻訳";
   element.addEventListener("click", () => requestTranslation(content, container));
   content.after(element);
   record.ui = element;
 }
 
 function showTranslation(content, record, translation, pending = false) {
-  if (record.ui?.dataset.discordTranslate === "translation") {
+  if (record.ui?.isConnected && record.ui.dataset.discordTranslate === "translation") {
     record.ui.children[0].textContent = pending ? "日本語訳（翻訳中…）" : "日本語訳";
     record.ui.children[1].textContent = translation;
     return;
@@ -157,6 +163,20 @@ function showTranslation(content, record, translation, pending = false) {
   element.append(label, body);
   content.after(element);
   record.ui = element;
+}
+
+function showCacheWarning(record, code) {
+  if (!CACHE_ERROR_CODES.has(code)) return;
+  const warning = document.createElement("span");
+  warning.dataset.discordTranslate = "cache-warning";
+  warning.className = "discord-translate-error";
+  const label = code === "cache_write_failed" ? "翻訳文を保存できませんでした" :
+    code === "cache_read_failed" ? "保存した翻訳文を読み込めませんでした" : "期限切れの翻訳文を削除できませんでした";
+  warning.textContent = `${label}（${code}）`;
+  warning.setAttribute("role", "status");
+  warning.setAttribute("aria-live", "polite");
+  if (record.ui.dataset.discordTranslate === "translation") record.ui.append(warning);
+  else { record.ui.after(warning); record.warning = warning; }
 }
 
 function showFailure(content, container, record, errorCode) {
@@ -202,7 +222,11 @@ function openTranslationRequest(payload, receive, fail) {
     port.onMessage.addListener((message) => {
       if (closed) return;
       const keys = message && typeof message === "object" ? Object.keys(message).sort().join(",") : "";
-      if ((message?.type === "progress" || message?.type === "result") && keys === "text,type" &&
+      const cache = message?.cache;
+      const validCache = payload.type === "translate" && message?.type === "result" && keys === "cache,text,type" &&
+        cache && Object.keys(cache).sort().join(",") === "error,saved" && typeof cache.saved === "boolean" &&
+        (cache.saved ? cache.error === null || cache.error === "cache_cleanup_failed" : cache.error === "cache_write_failed");
+      if ((message?.type === "progress" || message?.type === "result") && (keys === "text,type" || validCache) &&
           typeof message.text === "string" && message.text.length > 0 && message.text.length <= 64 * 1024 &&
           (message.type === "progress" || message.text.trim())) {
         if (message.type === "result") close();
@@ -229,17 +253,19 @@ function requestTranslation(content, container, retry = false) {
   if (!text) return;
 
   const previous = records.get(content);
-  if (!previous || previous.text !== text || previous.container !== container) return;
+  if (!previous || !currentRecord(content, container, previous)) return;
   if (!retry && previous.state !== "idle") return;
   if (retry && previous.state !== "failed") return;
 
   const record = {
     container,
     content,
+    messageId: container.id,
     text,
     state: "pending",
     ui: null,
   };
+  removeRecordUi(previous);
   records.set(content, record);
   showLoading(content, record);
 
@@ -267,10 +293,49 @@ function requestTranslation(content, container, retry = false) {
       finish();
       record.state = "succeeded";
       showTranslation(content, record, message.text.trim());
+      showCacheWarning(record, message.cache?.error);
     }
   };
   const close = openTranslationRequest({ type: "translate", messageId: container.id, text }, receive, fail);
   record.close = () => { close(); activeRequests.delete(record); };
+}
+
+function lookupTranslation(content, container, record) {
+  let closed = false;
+  const timer = setTimeout(() => finish({ status: "miss", error: "cache_read_failed" }), 5_000);
+  timer?.unref?.();
+  record.close = () => {
+    closed = true;
+    clearTimeout(timer);
+    activeRequests.delete(record);
+  };
+  activeRequests.add(record);
+  const finish = (response) => {
+    if (closed) return;
+    record.close();
+    if (!currentRecord(content, container, record)) return;
+    const code = response?.error;
+    const validError = code === null || CACHE_ERROR_CODES.has(code);
+    const keys = response && typeof response === "object" ? Object.keys(response).sort().join(",") : "";
+    if (response?.status === "hit" && keys === "error,status,text" && validError &&
+        typeof response.text === "string" && response.text.trim() && response.text.length <= 64 * 1024) {
+      record.state = "succeeded";
+      showTranslation(content, record, response.text);
+      showCacheWarning(record, code);
+    } else {
+      record.state = "idle";
+      showButton(content, container, record);
+      showCacheWarning(record, response?.status === "miss" && keys === "error,status" && validError
+        ? code : "cache_read_failed");
+    }
+  };
+  try {
+    chrome.runtime.sendMessage({ type: "lookupTranslation", messageId: record.messageId, text: record.text }, (response) => {
+      finish(chrome.runtime.lastError ? { status: "miss", error: "cache_read_failed" } : response);
+    });
+  } catch {
+    finish({ status: "miss", error: "cache_read_failed" });
+  }
 }
 
 function composerText(editor) {
@@ -471,27 +536,37 @@ function processContainer(container) {
     records.delete(content);
     return;
   }
-  if (previous?.text === text && previous.container === container) return;
+  if (previous && currentRecord(content, container, previous)) {
+    if (previous.ui?.isConnected) return;
+    if (previous.state === "pending" || previous.state === "lookup") {
+      if (previous.state === "pending") showLoading(content, previous);
+      else showButton(content, container, previous);
+      return;
+    }
+  }
   previous?.close?.();
   removeRecordUi(previous);
   removeContainerUi(container);
   const record = {
     container,
+    content,
+    messageId: container.id,
     text,
-    state: "idle",
+    state: "lookup",
     ui: null,
   };
   records.set(content, record);
   showButton(content, container, record);
+  lookupTranslation(content, container, record);
 }
 
 function scan() {
   if (!enabled) return;
-  for (const record of activeRequests) {
+  for (const [content, record] of records) {
     if (!currentRecord(record.content, record.container, record)) {
-      record.close();
+      record.close?.();
       removeRecordUi(record);
-      if (records.get(record.content) === record) records.delete(record.content);
+      records.delete(content);
     }
   }
   for (const container of document.querySelectorAll(MESSAGE_CONTAINER_SELECTOR)) processContainer(container);
@@ -501,7 +576,8 @@ function scan() {
 function startObserver() {
   if (observer || !document.body) return;
   observer = new MutationObserver(() => scan());
-  observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true,
+    attributes: true, attributeFilter: ["id"] });
 }
 
 function stopObserver() {
@@ -516,7 +592,7 @@ function applyEnabled(nextEnabled) {
     for (const record of composers.values()) disposeComposer(record);
     stopObserver();
     stopBridge();
-    records = new WeakMap();
+    records = new Map();
     removeAllUi();
     return;
   }

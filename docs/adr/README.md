@@ -13,5 +13,6 @@
 | [ADR-005](005-extension-document-translation-bridge.md) | Accepted, implemented and verified | 2026-08-18 | queue/cache/検証をservice workerに残し、翻訳HTTPだけをタブ内Extension document bridgeへ委譲する。 |
 | [ADR-006](006-manual-per-message-translation.md) | Accepted, implemented and verified | 2026-08-18 | ON中は各メッセージに翻訳buttonを置き、押下時だけ既存経路へ翻訳を依頼する。 |
 | [ADR-007](007-streaming-translation.md) | Accepted, implemented; Chrome verified by user | 2026-10-02 | 既存bridgeのSSEと要求用Portで生成中の訳文を順次表示し、最終検証後だけ確定する。 |
+| [ADR-008](008-persist-received-translations.md) | Accepted, implemented; Chrome verified by user | 2026-10-05 | 受信完成訳だけを端末内に5日間保存し、表示メッセージに一致する訳文を復元する。 |
 
 Qwen3.5採用、queue 2、FastAPI/Flask、launchdの詳細は未決定であり、現時点ではADRを作成しない。

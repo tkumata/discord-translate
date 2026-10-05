@@ -108,17 +108,17 @@ SSEをSPEC-STREAM-001に従って累積し、HTTP 200、非空訳文、`finish_r
 
 対応要求: REQ-F-001, REQ-F-009, REQ-F-012
 
-- toolbar actionのpopupに、全Discordタブ共通の`有効` checkboxを1つだけ置く。初期値はOFFとし、`chrome.storage.local`へbooleanの`enabled`だけを保存する。
+- toolbar actionのpopupに、全Discordタブ共通の`有効` checkboxを1つだけ置く。初期値はOFFとし、`chrome.storage.local`へ設定としてbooleanの`enabled`を保存する。受信完成訳の保存はSPEC-CACHE-001〜004に従う。
 - OFF→ON操作ではcheckboxを一時disabledにして`接続確認中`と表示し、popup documentから定数`http://127.0.0.1:8080/health`へ`GET`する。`AbortController`で5秒後に中断し、ChromeのLNA promptで許可された後、HTTP 200かつ追加fieldのないJSON object `{"status":"ok"}`の場合だけ`enabled=true`を保存する。
 - LNA拒否、timeout、network、HTTP非200、JSON parseまたはschema失敗では`enabled=false`を維持し、本文を含まない日本語状態と固定codeをpopupへ表示する。codeは順に`lna_denied`、`health_timeout`、`health_network_error`、`health_http_error`、`health_invalid_response`とする。ブラウザが拒否を識別可能な`NotAllowedError`を返さない場合は`health_network_error`へ正規化する。
 - ON→OFF操作はhealth確認をせず、即時`enabled=false`を保存する。
 - OFFでは新しい翻訳要求を作らず、Extensionが挿入した`翻訳`ボタン、訳文、loading、error、`再試行`をすべて除去する。原文には触れない。
 - ONへ変更すると、各Discordタブでbridgeと`MutationObserver`を開始し、現在表示中メッセージを1回走査する。以後の新規メッセージも検出するが、この走査・検出・bridge生成では翻訳要求Portも翻訳POSTも開始しない。
-- 翻訳可能な各メッセージには初期状態として`翻訳`buttonを1つだけ表示する。button押下時だけ、対象本文について1つの要求用Portを開き、1回の翻訳要求を送る。
+- 翻訳可能な各メッセージでは初回に保存訳を検索する。有効な保存訳は完成表示へ復元し、missでは`翻訳`buttonを1つ表示する。検索中は`確認中…`としてbuttonをdisabledにする。button押下時だけ、対象本文について1つの要求用Portを開き、1回の翻訳要求を送る。
 - 押下後はbuttonを`翻訳中…`へ切り替えてdisabledにし、同じUI状態からの重複押下と重複message要求を抑止する。
 - 成功時は原文を置換せず、対象content要素の直後に`lang="ja"`の訳文ブロックを1つ表示する。先頭に小さな太字の`日本語訳`ラベルを置き、上余白8px、左の細線、薄い背景、内側余白で原文との境界と訳文の範囲を示す。訳文は通常の本文色と改行を維持し、色はDiscordのテーマ変数に合わせる。
 - 失敗時は原文を残し、`翻訳できませんでした（<固定error code>）`と`再試行`buttonを同じ位置に表示する。表示するcodeはservice workerが返した既存固定値だけとし、本文、response、`error.message`、URLを表示・logしない。自動retryは行わず、`再試行`押下だけが新しいmessage要求を作る。
-- 本文が変わった場合、または対象content要素が差し替えられた場合は、旧本文のloading、訳文、errorを破棄し、新本文用の初期`翻訳`buttonへ戻す。
+- 本文、メッセージID、対象content要素が変わった場合は旧対象の表示を破棄する。新しい対象はSPEC-CACHE-003に従って保存訳を検索する。
 - `翻訳`、翻訳中、成功、失敗の表示要素にはExtension固有の`data-discord-translate`属性を付け、本文抽出と再走査の対象外にする。
 
 UI状態は`翻訳 -> 翻訳中… -> 日本語訳（翻訳中…） -> 日本語訳`とする。失敗時は部分訳を除去して`固定code + 再試行`へ進む。表示・購読解除の詳細はSPEC-STREAM-003を参照する。`再試行`は`翻訳中…`へ戻る。OFF、本文変更、DOM差し替えは進行中結果を表示対象から外し、OFFならUIを除去し、ONの新本文なら`翻訳`へ戻す。順次表示は実装・Node test済み、実ChromeもTask 5でユーザー確認済みである。
@@ -153,7 +153,7 @@ service workerはSPEC-API-001/002の固定payloadを構築し、翻訳依頼を�
 
 翻訳サーバへのPOSTを開始できる入口は、`翻訳`、`再試行`、`英語に翻訳`の押下から届いた正規要求のcache missだけである。DOM走査、`MutationObserver`通知、button/bridge生成、popupのLNA bootstrap用health GET、cache hit、`元に戻す`は翻訳POSTではない。実装状態: Phase 5.6で`defaultTranslator`を検証済みbridge registryの`requestImpl`へ復旧し、既定経路がservice workerのglobal fetchを呼ばないことをNode testで確認済みである。
 
-service worker、content script、popupは本文・訳文・request/response body、`error.message`、要求URLを`console`へ出さず、通常logと永続storageにも保存しない。service workerは固定error codeだけを返す。SHA-256生成失敗は`hash_error`、翻訳POSTのfetchが`NotAllowedError`または`SecurityError`で拒否された場合は`lna_denied`、自身の120秒abortは`request_timeout`、その他のfetch拒否は`network_error`とする。content scriptはこの固定codeだけを表示し、未知値を`network_error`へ正規化する。popupはhealth状態の固定codeだけを扱い、本文・訳文を送受信しない。
+service worker、content script、popupは本文・訳文・request/response body、`error.message`、要求URLを`console`へ出さず、通常logにも保存しない。永続storageにはSPEC-CACHE-001〜004の受信完成訳と識別情報だけを例外として保存する。service workerは固定error codeだけを返す。SHA-256生成失敗は`hash_error`、翻訳POSTのfetchが`NotAllowedError`または`SecurityError`で拒否された場合は`lna_denied`、自身の120秒abortは`request_timeout`、その他のfetch拒否は`network_error`とする。content scriptはこの固定codeだけを表示し、未知値を`network_error`へ正規化する。popupはhealth状態の固定codeだけを扱い、本文・訳文を送受信しない。
 
 ### SPEC-EXT-004 Manifest V3と権限
 
@@ -195,10 +195,10 @@ service worker、content script、popupは本文・訳文・request/response bod
 - key: `SHA-256(UTF-8(JSON.stringify([翻訳先, trim済み本文])))`のhex。翻訳先は`ja`または`en`。Web Cryptoを使い、本文そのものをMap keyにしない。
 - 重複job: 同じkeyのqueued/running Promiseを共有し、server要求を1回にまとめる。
 - cache: 成功した訳文だけをmemory `Map`へ最大256件、成功時から30分保存する。hit時に末尾へ移すLRUとし、期限切れと最古entryを削除する。errorはcacheしない。
-- service worker停止・Extension reload・Chrome終了: queue、in-flight、cacheをすべて失う。本文・訳文の復旧保存は行わない。未完了の要求Portはcontent scriptで失敗表示となり、利用者が手動再試行する。
+- service worker停止・Extension reload・Chrome終了: queue、in-flight、memory cacheを失う。未完了jobの復旧保存は行わない。受信完成訳の永続キャッシュはSPEC-CACHE-001〜004に従って保持する。未完了の要求Portはcontent scriptで失敗表示となり、利用者が手動再試行する。
 - DOM削除・本文変更: workerはjobを継続できるが、content scriptが結果を破棄する。cancel protocolは追加しない。
 
-64件は利用者が短時間に押した翻訳要求を有限に収める上限とする。queue待機120秒と実行120秒を別々に適用し、最大処理時間は240秒とする。実行120秒は固定7ケースの一括実行が25秒を超えて継続した実測tailを許容しつつ、Chromeの単一event/API call上限5分未満へ収める有限上限である。永続化、無限待ち、server-side cancellationは追加しない。256件・30分cache、queue 2不採用、製品固有のserver-side訳文cache不採用は維持する。既存の入力KV cacheは再利用する。
+64件は利用者が短時間に押した翻訳要求を有限に収める上限とする。queue待機120秒と実行120秒を別々に適用し、最大処理時間は240秒とする。実行120秒は固定7ケースの一括実行が25秒を超えて継続した実測tailを許容しつつ、Chromeの単一event/API call上限5分未満へ収める有限上限である。未完了jobの永続化、無限待ち、server-side cancellationは追加しない。256件・30分cache、queue 2不採用、製品固有のserver-side訳文cache不採用は維持する。既存の入力KV cacheは再利用する。
 
 Chromeは通常、約30秒のidle、1 event/API callの5分超、service worker自身の`fetch()` responseの30秒超でExtension service workerを終了し得る。翻訳HTTPはbridge documentだけが実行し、service workerは要求用Portでprogress/result/errorを送る。Portの開設だけでlifetimeは保証せず、contentも最大240秒の監督timerを持つ。Chrome 114以降はlong-lived messagingでのmessage送信がservice worker lifetimeを延長する。listenerはmodule top-levelで同期登録し、global queue/cacheの存続を正しさの前提にしない。最大240秒は単一処理5分未満であり、終了後に失われたcallerはerror UIから再試行する。
 
@@ -308,7 +308,7 @@ HTTP非2xx、120秒timeout、接続不能、空body、JSON/SSE不正、schema不
 - content script はボタン押下時だけ、固定名 `discord-translate-request` の `runtime.Port` を開く。1つの Port で既存 shape の `{type:"translate",messageId,text}` を1回だけ受理する。Port 接続だけでは POST しない。
 - 下書き翻訳も同じPortで`{type:"translateDraft",text}`を1回だけ受理する。
 - service worker は既存の正規 Discord top frame sender/input 検証を適用する。bridge Port とは固定名・frame・URLの検証を分け、未知 Port や再要求、不正 shape を拒否する。
-- service worker から content へ送る shape は `{type:"progress",text}`、`{type:"result",text}`、`{type:"error",error}` だけとする。`progress.text` はその時点の累積訳文で、`result.text` だけが確定訳文である。Port と record が対応するため、content 側に新しい job ID を持たせない。
+- service worker から content へ送る shape は `{type:"progress",text}`、`{type:"result",text}`、`{type:"error",error}` とする。受信完成結果だけはSPEC-CACHE-004の保存状態を添える。`progress.text` はその時点の累積訳文で、`result.text` だけが確定訳文である。Port と record が対応するため、content 側に新しい job ID を持たせない。
 - bridge は既存の検証済み Port で `{type:"chunk",jobId,payload}` を各 JSON event ごとに送り、`[DONE]` 受信後に `{type:"end",jobId}` を送る。非 200 の status と固定 error は既存 envelope を維持する。chunk で pending を完了せず、別 tab・未知 job・終端後の通知を表示へ流さない。
 - worker が検証失敗または実行 timeout で job を終了するときは、同じ bridge Port へ固定 shape の `{type:"abort",jobId}` を送り、bridge がその既知 job の reader/fetch を停止する。bridge 切断時も pending reader を停止する。これは HTTP 読取りの解放であり、利用者操作による個別 job cancel や server-side cancellation は追加しない。
 - queue の同一本文 job には複数の購読者を登録できる。途中参加者へ現在の累積訳文を1回送り、その後の更新と終端を共有する。POST は1回、cache hit は確定全文を1回返す。失敗・部分訳は cache へ保存しない。
@@ -480,3 +480,99 @@ SPEC-EXT-003、SPEC-QUEUE-001、SPEC-STREAM-002へ追加仕様を同期した。
 - 新機能の実Chrome受け入れはユーザ確認により合格とする。
 - 個別の異常系・画面別の実機試験内訳は未報告である。
 - 自動テストの編集モデルはDiscord固有のイベント処理を再現しない。
+
+## 14. 受信翻訳文の永続キャッシュ案（2026-10-05）
+
+状態: 2026-10-05承認・実装済み。Node自動検証成功。実Chrome受け入れはユーザ確認で合格。
+SPEC-EXT-001〜003とSPEC-QUEUE-001に本節の例外を適用する。
+翻訳POSTの契機は既存の手動操作に限定する。
+MUSTは必須、SHOULDは推奨、MAYは任意を表す。
+
+### SPEC-CACHE-001 保存対象と識別
+
+- MUST: 受信翻訳の`translate`要求だけを保存対象とする。
+- MUST: 対象は既存selectorで検出した表示メッセージ本文とする。
+- MUST: メッセージIDは既存の数値形式で検証する。
+- MUST: 原文の識別には既存の翻訳先込みSHA-256を使う。
+- MUST: 保存キーに版、メッセージID、原文識別hashを含める。
+- MUST: 保存値は完成訳、版、保存時刻、失効時刻に限定する。
+- MUST: 完成訳は既存の最終応答検証を通過した文字列とする。
+- MUST: 保存開始時に受信要求の購読が有効な場合だけ保存する。
+- MUST: `translateDraft`要求は永続キャッシュを読み書きしない。
+- MUST: 原文、prompt、応答全体、途中訳、失敗結果は保存しない。
+
+メモリキャッシュhitの受信翻訳も、対象IDに完成訳を保存する。
+同文の別メッセージは、保存キーが異なるため自動復元しない。
+共有jobの完了だけでは、解除済み受信要求の保存を行わない。
+既存の返信プレビュー除外は維持する。
+
+### SPEC-CACHE-002 寿命と削除
+
+- MUST: 失効時刻は初回保存成功時刻から432,000,000ms後とする。
+- MUST: `now < expiresAt`の場合だけ保存訳を有効とする。
+- MUST: 有効期間内の再保存と復元では有効期限を延長しない。
+- MUST: 期限切れの場合はキャッシュmissとして扱う。
+- MUST: worker起動時と保存前に期限切れデータを削除する。
+- MUST: 永続領域の保存失敗では有効な既存データを削除しない。
+- MUST: キャッシュ削除で`enabled`設定を削除しない。
+
+OFFは表示と購読を破棄するが、有効な保存訳は削除しない。
+再度ONにした場合は期限内の保存訳を復元する。
+worker停止、拡張機能再読込、Chrome再起動で保存訳を失わない。
+拡張機能の削除やストレージの明示削除は保持対象外とする。
+拡張機能が停止中の場合は、期限切れデータの物理削除を行えない。
+5日間は復元可能な有効期間であり、厳密な時刻の物理削除ではない。
+期限切れ後に手動翻訳した場合は、新しい5日間の保存を開始する。
+
+### SPEC-CACHE-003 検索と表示
+
+- MUST: ON中の初回検出と再描画で保存訳を検索する。
+- MUST: 検索には`lookupTranslation`とID、trim済み本文を渡す。
+- MUST: workerは既存sender境界と受信入力境界を検証する。
+- MUST: 検索はqueue、bridge、翻訳APIへ進まない。
+- MUST: 検索中は対象recordの重複検索を抑止する。
+- MUST: hit時は既存の完成訳表示でブロックを1つ復元する。
+- MUST: miss時は手動の`翻訳`ボタンを1つ表示する。
+- MUST: 本文、ID、record、DOMの一致を検索完了時に確認する。
+- MUST: OFFまたは一致しない場合は検索結果を破棄する。
+- MUST: 本文変更やID変更の場合は新しい対象を検索する。
+- MUST: 同じ対象の追加UIだけが失われた場合も表示を復元する。
+
+content scriptは必要なID属性の変更も検出する。
+復元したブロックは既存のラベル、改行、`lang="ja"`を維持する。
+復元した本文は`textContent`で表示する。
+検索中の押下は抑止し、検索完了後に手動翻訳を受け付ける。
+検索の監督期限は5秒とし、超過を`cache_read_failed`で通知する。
+hit、miss、読込み失敗のいずれでも自動翻訳を開始しない。
+
+### SPEC-CACHE-004 容量とエラー
+
+保存先は既存権限で使用できる`chrome.storage.local`とする。
+`storage.sync`とDiscordページの`localStorage`は使用しない。
+Chromeの標準容量上限は10MBである。
+根拠は[Chrome Storage API](https://developer.chrome.com/docs/extensions/reference/api/storage)を参照する。
+
+- MUST: 容量不足と書込み失敗を`cache_write_failed`へ正規化する。
+- MUST: 書込み失敗でも検証済み完成訳を画面に表示する。
+- MUST: 書込み失敗時は「翻訳文を保存できませんでした」と表示する。
+- MUST: 完成結果に保存状態を添え、保存成功と失敗を区別する。
+- MUST: 読込み失敗を`cache_read_failed`として表示する。
+- MUST: 読込み失敗後は手動の`翻訳`ボタンを表示する。
+- MUST: 不正な保存値は表示せず、削除対象とする。
+- MUST: 削除失敗は`cache_cleanup_failed`で通知する。
+- MUST: 例外詳細、原文、訳文をログへ出力しない。
+
+容量不足時は期限切れデータだけを削除し、保存を1回再試行する。
+再試行に失敗した場合は、永続保存成功として扱わない。
+自動の無限再試行、早期LRU削除、新しい権限は追加しない。
+完成結果の保存処理は5秒で監督し、表示を無期限に待たせない。
+復元時の期限判定は削除処理の成功に依存しない。
+
+検索要求は`{type:"lookupTranslation",messageId,text}`とする。
+検索応答は`{status:"hit",text,error}`か`{status:"miss",error}`とする。
+正常検索では`error`を`null`とする。
+受信完成結果は`{type:"result",text,cache:{saved,error}}`とする。
+保存成功では`saved:true`と`error:null`を返す。
+保存失敗では`saved:false`と`error:"cache_write_failed"`を返す。
+削除失敗は保存成功時も`error:"cache_cleanup_failed"`で通知する。
+投稿用の完成結果は既存の`{type:"result",text}`を維持する。
