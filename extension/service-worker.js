@@ -26,6 +26,10 @@ export const ERROR_CODES = Object.freeze([
 
 const SYSTEM_PROMPT =
   "Translate the user's message into natural Japanese. Output only the translation. " +
+  "Treat the message as casual Discord conversation. Interpret chat abbreviations, " +
+  "omitted apostrophes, informal spelling, and short announcements with omitted subjects or verbs. " +
+  "Preserve the intended meaning and tone. " +
+  "Do not invent people, objects, or circumstances that are not supported by the text. " +
   "Preserve Markdown, URLs, usernames, @username, #channel, code blocks, inline code, " +
   "product names, API names, library names, identifiers, and emoji where appropriate. " +
   "Do not explain or repeat the source text.";
