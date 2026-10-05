@@ -16,22 +16,6 @@ function response(status, payload) {
   };
 }
 
-function fakeTimer() {
-  let timer;
-  return {
-    setTimeout(callback, ms) {
-      timer = { callback, ms };
-      return timer;
-    },
-    clearTimeout(value) {
-      if (value === timer) timer.cleared = true;
-    },
-    get timer() {
-      return timer;
-    },
-  };
-}
-
 test("accepts only the exact healthy response and fixed URL", async () => {
   const calls = [];
   const result = await checkHealth({
@@ -81,18 +65,18 @@ test("maps network and LNA rejection to fixed codes", async () => {
 });
 
 test("aborts health request at the fixed timeout", async () => {
-  const timers = fakeTimer();
+  let timer;
   const request = checkHealth({
-    setTimeoutImpl: timers.setTimeout,
-    clearTimeoutImpl: timers.clearTimeout,
+    setTimeoutImpl(callback, ms) { timer = { callback, ms }; return timer; },
+    clearTimeoutImpl(value) { if (value === timer) timer.cleared = true; },
     fetchImpl: (_url, { signal }) => new Promise((resolve, reject) => {
       signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
     }),
   });
-  assert.equal(timers.timer.ms, HEALTH_TIMEOUT_MS);
-  timers.timer.callback();
+  assert.equal(timer.ms, HEALTH_TIMEOUT_MS);
+  timer.callback();
   assert.deepEqual(await request, { ok: false, error: "health_timeout" });
-  assert.equal(timers.timer.cleared, true);
+  assert.equal(timer.cleared, true);
 });
 
 test("stores true only after health success and disables without health", async () => {

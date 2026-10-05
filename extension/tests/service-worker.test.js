@@ -8,10 +8,8 @@ import {
   defaultBridgeRegistry,
   defaultTranslator,
   ERROR_CODES,
-  FETCH_TIMEOUT_MS,
   MAX_CACHE_ENTRIES,
   MAX_UNIQUE_JOBS,
-  QUEUE_WAIT_TIMEOUT_MS,
   TranslationError,
   TranslationQueue,
   buildPayload,
@@ -285,7 +283,7 @@ test("expires queued jobs without fetching them", async () => {
   const queued = queue.translate("queued");
   await new Promise((resolve) => setImmediate(resolve));
   const timeout = timers.timers
-    .filter((timer) => timer.active && timer.ms === QUEUE_WAIT_TIMEOUT_MS)
+    .filter((timer) => timer.active && timer.ms === 120_000)
     .at(-1);
   assert.ok(timeout);
   timeout.callback();
@@ -303,7 +301,7 @@ test("aborts a request after the fixed request timeout", async () => {
         options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       }),
   });
-  const timeout = timers.timers.find((timer) => timer.active && timer.ms === FETCH_TIMEOUT_MS);
+  const timeout = timers.timers.find((timer) => timer.active && timer.ms === 120_000);
   assert.ok(timeout);
   timeout.callback();
   await assert.rejects(request, (value) => value.code === "request_timeout");
@@ -338,11 +336,6 @@ test("default translation delegates to the tab bridge without using global fetch
     port.disconnect();
     globalThis.fetch = originalFetch;
   }
-});
-
-test("service-worker execution and queue timeouts are 120 seconds", () => {
-  assert.equal(FETCH_TIMEOUT_MS, 120_000);
-  assert.equal(QUEUE_WAIT_TIMEOUT_MS, 120_000);
 });
 
 test("normalizes Web Crypto failures to hash_error", async () => {

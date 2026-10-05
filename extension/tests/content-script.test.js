@@ -188,19 +188,8 @@ class FakeDataTransfer {
 }
 
 class FakeMutationObserver {
-  constructor(callback) {
-    this.callback = callback;
-    this.disconnected = false;
-  }
-
-  observe(target, options) {
-    this.target = target;
-    this.options = options;
-  }
-
-  disconnect() {
-    this.disconnected = true;
-  }
+  observe() {}
+  disconnect() {}
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
