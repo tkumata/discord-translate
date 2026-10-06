@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
-MODEL="${MODEL:-mlx-community/Qwen3-8B-4bit}"
+MODEL="${MODEL:-mlx-community/Qwen3.5-9B-MLX-4bit}"
 PORT="${PORT:-8080}"
 CORS_ORIGIN="${CORS_ORIGIN:-}"
 SERVER="${PROJECT_DIR}/.venv/bin/mlx_lm.server"

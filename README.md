@@ -54,7 +54,7 @@ python3 -m venv .venv
 ```bash
 HF_HUB_OFFLINE=0 HF_HUB_DISABLE_TELEMETRY=1 \
   ./.venv/bin/mlx_lm.generate \
-  --model mlx-community/Qwen3-8B-4bit \
+  --model mlx-community/Qwen3.5-9B-MLX-4bit \
   --prompt 'Translate into Japanese: The build passed.' \
   --max-tokens 8
 ```
@@ -72,7 +72,7 @@ HF_HUB_OFFLINE=0 HF_HUB_DISABLE_TELEMETRY=1 \
 次の `<拡張機能ID>` を、Chrome に表示された実際の ID に置き換えて実行します。
 
 ```bash
-export MODEL=mlx-community/Qwen3-8B-4bit
+export MODEL=mlx-community/Qwen3.5-9B-MLX-4bit
 export PORT=8080
 export CORS_ORIGIN="chrome-extension://<拡張機能ID>"
 ./scripts/start-server.sh
