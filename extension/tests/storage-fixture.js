@@ -1,4 +1,5 @@
-import { registerChromeListeners, TranslationQueue, REQUEST_PORT_NAME } from "../service-worker.js";
+import { registerChromeListeners, REQUEST_PORT_NAME } from "../service-worker.js";
+import { TranslationQueue } from "../translation-queue.js";
 
 export async function waitFor(predicate) {
   const deadline = Date.now() + 5_000;

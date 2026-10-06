@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createReceivedTranslationCache, RECEIVED_CACHE_PREFIX, RECEIVED_CACHE_TTL_MS } from "../received-translation-cache.js";
-import { sha256Hex } from "../service-worker.js";
+import { sha256Hex } from "../translation-queue.js";
 import { storageFixture, workerFixture, waitFor } from "./storage-fixture.js";
 
 const source = { messageId: "chat-messages-1-2", text: "private-source-marker" };

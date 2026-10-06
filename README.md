@@ -153,6 +153,12 @@ npm --prefix extension test
 | パス | 内容 |
 | --- | --- |
 | `extension/` | Chrome 拡張機能 |
+| `extension/content-script.js` | 設定・observer・bridgeの起動と終了 |
+| `extension/received-messages.js` / `draft-composer.js` | 受信翻訳と投稿前英訳の独立した状態・UI |
+| `extension/request-client.js` | content側のPort通信と固定応答検証 |
+| `extension/service-worker.js` | Chrome入口と翻訳・保存処理の配線 |
+| `extension/translation-protocol.js` | 入力・固定payload・stream・最終応答の契約 |
+| `extension/translation-queue.js` / `bridge-registry.js` | 共有ジョブ・cacheとtab別Port接続 |
 | `extension/tests/` | 拡張機能の自動テスト |
 | `scripts/start-server.sh` | ローカル推論サーバの起動 |
 | `scripts/verify.py` | API 検証とセルフチェック |

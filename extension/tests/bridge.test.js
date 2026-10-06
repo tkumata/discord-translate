@@ -7,7 +7,7 @@ import {
   connectBridge,
   validateBridgeRequest,
 } from "../bridge.js";
-import { buildPayload } from "../service-worker.js";
+import { buildPayload } from "../translation-protocol.js";
 
 function port() {
   return {

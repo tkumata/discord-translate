@@ -3,9 +3,10 @@
 2026-10-02承認の順次表示を実装済み。第12節に詳細を記載する。自動・実モデル検証は成功、実Chromeも2026-10-02のユーザーによるTask 5実機確認で合格した。入力KV cacheの実機確認結果は仕様書SPEC-KV-001を参照する。
 
 - Status: Current
-- Last reviewed: 2026-10-05
+- Last reviewed: 2026-10-06
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
+- Maintainability: 2026-10-06の責務分離は完了。Node test 72件成功、実Chrome受け入れはユーザの実機確認で合格。
 
 ## 1. 設計目的
 
@@ -68,6 +69,16 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 - launchd は起動 script を呼び、server 引数を別の正本として複製しない。
 
 この方向により、Discord DOM 変更、Chrome 通信、MLX server 更新、OS lifecycle を別々に変更できる。
+
+2026-10-06の責務分離後は、worker入口がprotocol、queue、registry、受信保存を配線する。
+protocolはqueue、registry、Chrome入口を参照しない。
+queueのrequest実装は入口から注入し、registryがPort transportへ接続する。
+Web Crypto、timer、診断出力はprotocolに置かない。
+
+content側はManifest順に`request-client.js`、`received-messages.js`、`draft-composer.js`、`content-script.js`をISOLATED環境へ読み込む。
+受信と投稿は起動時にPort関数を受け取り、相互のMapを操作しない。
+OFFで各機能をdisposeし、再度ONにした時は新しい機能状態を作る。
+通信の終了判定と、表示対象の有効性・編集世代の判定は別の責務として維持する。
 
 ## 5. データフロー
 
@@ -183,9 +194,15 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 | ファイル | 責務 |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `extension/manifest.json` | MV3、Discord content script、module service worker、popup、`storage`、loopback host permission |
-| `extension/service-worker.js` | sender/input/Port 検証、固定 payload、FIFO queue、重複 Promise、memory LRU、bridge registryを使う既定job 配線、120秒 job 監督、HTTP/response 最終検証 |
+| `extension/service-worker.js` | Chrome listenerの同期登録、要求Port、翻訳queueとbridge registryの既定配線、受信完成訳の保存と検索の配線 |
+| `extension/translation-protocol.js` | エラー契約、sender/input、固定payload、stream累積と最終応答の検証。Chrome起動、HTTP、timer、ログ出力を持たない |
+| `extension/translation-queue.js` | SHA-256、受付順を保つhash処理、FIFO、共有jobと購読、memory LRU、120秒の待機・実行監督 |
+| `extension/bridge-registry.js` | tab別bridge Port、接続待機、job IDと応答の対応、transport切断と解放 |
 | `extension/received-translation-cache.js` | 受信完成訳の個別キー保存、5日期限、検索、期限切れ削除、Storage API操作の直列化と5秒監督。 |
-| `extension/content-script.js` | DOM 検出、各 message の翻訳 button、押下時だけの依頼、連打抑止、bridge iframe 1個の ON/OFF lifecycle、stale 結果破棄、手動再試行 |
+| `extension/content-script.js` | top frame起動、ON/OFF、observer、bridge iframe、受信・投稿機能のscanとdispose |
+| `extension/request-client.js` | 要求Port、固定応答と保存metadataの検証、240秒の通信期限、切断と解放。入力文字数上限とPort関数だけをclassic script間で共有する |
+| `extension/received-messages.js` | 受信message検出、保存訳検索、翻訳表示と警告、手動再試行、ID・本文・DOM・recordによる失効判定 |
+| `extension/draft-composer.js` | 投稿入力欄の検出と更新、編集世代、完成英訳の適用、翻訳前の下書き復元、購読とUIの解放 |
 | `extension/bridge.html` | 非表示 Extension document と外部入力を持たない静的 script 入口 |
 | `extension/bridge.js` | 固定 Port job の検証、固定 localhost POST、120秒 timeout、固定result envelope |
 | `extension/styles.css` | 翻訳 button、loading、訳文、error、再試行 button の最小表示。テーマの代替配色だけDiscordのテーマclassを参照する |
@@ -193,21 +210,25 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 | `extension/popup.js` | pure export 可能な有効化状態遷移、固定health GET、5秒 timeout、厳密 schema、`chrome.storage.local`同期 |
 | `extension/popup.css` | disabled checkbox と状態 code の最小 layout |
 | `extension/package.json` | Node に ES module として test 対象を解釈させる`{"type":"module","private":true}` だけ。依存なし |
-| `extension/tests/service-worker.test.js` | Node 標準`node:test` による既定 bridge 配線、global fetch 不使用、120秒 timeout、sender URL 境界、input、payload、SHA-256/error 分類、response、FIFO、上限、重複、cache の回帰検査 |
+| `extension/tests/service-worker.test.js` | 要求Port、既定bridge配線、global fetch不使用、bridge→queueの順次表示と購読の結合検証 |
+| `extension/tests/translation-protocol.test.js` | sender/input、固定payload、最終応答、thinking・usage・stream検証 |
+| `extension/tests/translation-queue.test.js` | 翻訳先分離、FIFO、上限、待機と実行期限、hash失敗、診断、成功LRU |
+| `extension/tests/bridge-registry.test.js` | bridge sender、tab配送、切断、不正応答の固定エラー |
 | `extension/tests/received-translation-cache.test.js` | worker再生成、5日期限、容量不足、削除失敗、読取り専用検索、投稿用翻訳の保存除外。 |
 | `extension/tests/popup.test.js` | Node 標準`node:test`によるhealth成功、拒否、timeout、network、HTTP、schema、OFF 遷移の回帰検査 |
 | `extension/tests/bridge.test.js` | 固定 URL/payload、120秒timeout、network、HTTP/JSON envelope、任意入力拒否の回帰検査 |
-| `extension/tests/content-script.test.js` | scan だけでは要求なし、各message 1 button、クリック1回1要求、連打抑止、成功/失敗/再試行、OFF、本文変更・DOM差し替え時のstale破棄をNode標準`node:test`で検証 |
+| `extension/tests/content-script.test.js` | 設定通知によるON/OFF、bridgeとobserverのlifecycle |
+| `extension/tests/received-messages.test.js` | 手動翻訳、途中表示、失敗と再試行、保存訳復元、本文・ID・DOM変更時の古い結果破棄 |
+| `extension/tests/draft-composer.test.js` | 投稿用の英訳、Slate編集イベント、編集世代、復元、IME、古い結果破棄 |
+| `extension/tests/content-fixture.js` | Manifest順での実script読込み、模擬DOM、Chrome設定通知、observer通知、独立したSlate編集モデル |
+| `extension/tests/worker-test-fixture.js` | worker関連testが使う応答、Port、timer、診断のfixture |
 
 content scriptのDiscord DOM適合はブラウザDOM実体が必要であり、DOM libraryを追加せずunpacked Chromeの手動結合試験で検証する。実装前preflightは`node --version`、`node -e "require('node:test')"`、`node --check`の可用性確認とする。Nodeがなければ自動test未実行として停止し、依存導入を推測で行わない。
 
 最小検証commandは次とする。
 
 ```bash
-node --check extension/content-script.js
-node --check extension/service-worker.js
-node --check extension/popup.js
-node --check extension/bridge.js
+for file in extension/*.js; do node --check "$file" || exit 1; done
 node --test extension/tests/*.test.js
 node -e "JSON.parse(require('node:fs').readFileSync('extension/manifest.json', 'utf8'))"
 git diff --check
@@ -282,7 +303,8 @@ ADR-003、005、006、007の責務境界を維持する。
 | 既存モデル | 固定英語promptによる日本語から英語への翻訳。 |
 
 受信メッセージ処理と投稿入力欄処理は別のrecordで管理する。
-投稿入力欄処理は既存content script内の独立した関数群に置く。
+投稿入力欄処理は`draft-composer.js`、受信処理は`received-messages.js`に置く。
+両機能は別のclosureでrecordと有効状態を所有し、起動側には`scan`と`dispose`だけを返す。
 Discord固有の検出・抽出・更新は投稿入力欄処理へ限定する。
 HTTP、prompt、cacheの判断を投稿入力欄処理へ移さない。
 
@@ -468,3 +490,24 @@ Nodeの模擬DOMテストはCSSの描画と配色を検証しない。
 2026-10-05、ユーザは修正後の実機再確認で合格と報告した。
 ユーザの指定により、テーマ対応のタスクを完了とする。
 個別の操作状態の試験内訳とコントラストの実測値は未報告である。
+
+## 16. Chrome拡張の責務分離（2026-10-06）
+
+[実装計画](../plans/active/2026-10-06-extension-maintainability.md)の承認範囲で、受信、投稿、通信、起動とworker内部の責務を分離した。
+外部仕様、HTTP所有境界、queue、保存、生成設定は維持する。
+新規依存、build工程、権限は追加していない。
+
+受信recordの作成・破棄とqueueの期限切れ終了処理は各所有モジュール内で一元化する。
+受信UIは訳文ラベルと本文の参照を保持し、DOMの子順序へ依存しない。
+FIFOを保つhash受付の直列処理は`pendingHashRequests`としてqueueが所有する。
+HTTPを実行しない翻訳要求の監督関数は`runTranslationRequest`とする。
+
+Node testは元の70件を保持し、期限通知前のqueued job失効と翻訳本文消失への回帰を2件追加した。
+全72件、JavaScript構文、Manifest、差分の空白検証は成功した。
+content fixtureは非公開関数をsourceへ追記せず、Manifest順の実scriptをChrome設定・observer通知・button操作から検証する。
+既定bridgeの結合testは固定回数のイベントループ待機をやめ、非同期hash後の要求到達を待つ。
+
+2026-10-06、ユーザは今回の変更を実機確認し、動作に問題ないと報告した。
+この報告を根拠に今回の実Chrome受け入れを合格とし、ユーザの指定により本変更を完了とする。
+エージェントによる実Chrome操作と、個別の操作状態・異常系の実機試験内訳は未確認である。
+残る可読性の改善は今後の別作業とし、今回の完了範囲へ追加しない。

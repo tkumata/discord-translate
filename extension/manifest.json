@@ -12,6 +12,9 @@
         "https://discord.com/*"
       ],
       "js": [
+        "request-client.js",
+        "received-messages.js",
+        "draft-composer.js",
         "content-script.js"
       ],
       "css": [
