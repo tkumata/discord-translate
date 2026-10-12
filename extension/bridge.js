@@ -1,3 +1,5 @@
+import { COMPANION_URL, COMPANION_HEADERS } from "./translation-provider.js";
+
 export const API_URL = "http://127.0.0.1:8080/v1/chat/completions";
 export const BRIDGE_PORT_NAME = "discord-translate-bridge";
 export const FETCH_TIMEOUT_MS = 120_000;
@@ -41,7 +43,8 @@ function logInvalidResponse(logger) {
 }
 
 export function validateBridgeRequest(message) {
-  if (!exactKeys(message, ["jobId", "payload", "type"])) return false;
+  if (!exactKeys(message, ["jobId", "payload", "type"]) &&
+      !(message?.provider === "chatgpt" && exactKeys(message, ["jobId", "payload", "provider", "type"]))) return false;
   if (message.type !== "translate" || typeof message.jobId !== "string" || message.jobId.length === 0) {
     return false;
   }
@@ -111,7 +114,7 @@ export async function readSse(body, onEvent, signal) {
             data = [];
             eventBytes = 0;
             if (event === "[DONE]") return;
-            onEvent(JSON.parse(event));
+            if (onEvent(JSON.parse(event)) === true) return;
           }
         } else if (line === "data" || line.startsWith("data:")) {
           const text = line.slice(5).replace(/^ /, "");
@@ -175,9 +178,10 @@ export async function handleBridgeRequest(
   }, FETCH_TIMEOUT_MS);
 
   try {
-    const response = await fetchImpl(API_URL, {
+    const chatgpt = message.provider === "chatgpt";
+    const response = await fetchImpl(chatgpt ? `${COMPANION_URL}/v1/chat/completions` : API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(chatgpt ? COMPANION_HEADERS : {}) },
       body: JSON.stringify(message.payload),
       signal: controller.signal,
     });

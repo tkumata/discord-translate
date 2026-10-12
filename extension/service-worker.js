@@ -8,10 +8,11 @@ import {
 } from "./translation-protocol.js";
 import { TranslationQueue, sha256Hex } from "./translation-queue.js";
 import { BridgeRegistry } from "./bridge-registry.js";
+import { readProvider } from "./translation-provider.js";
 
 export const REQUEST_PORT_NAME = "discord-translate-request";
 
-export function connectRequestPort(port, runtimeId, translator, receivedCache) {
+export function connectRequestPort(port, runtimeId, translator, receivedCache, getProvider = async () => "local") {
   if (port?.name !== REQUEST_PORT_NAME || !validateSender(port.sender, runtimeId)) {
     port?.disconnect?.();
     return false;
@@ -51,22 +52,22 @@ export function connectRequestPort(port, runtimeId, translator, receivedCache) {
       finish({ type: "error", error: toErrorCode(value) });
       return;
     }
-    translator.translate(validated.text, port.sender.tab.id, {
-      targetLanguage: validated.targetLanguage,
-      signal: controller.signal,
-      onProgress: (text) => send({ type: "progress", text }),
-    }).then(
-      async (text) => {
-        if (closed) return;
-        if (validated.targetLanguage === "en") {
-          finish({ type: "result", text });
-          return;
-        }
-        const cache = await receivedCache.save(validated, text, { signal: controller.signal });
-        finish({ type: "result", text, cache });
-      },
-      (value) => finish({ type: "error", error: toErrorCode(value) }),
-    );
+    void getProvider().then(async (provider) => {
+      if (closed) return;
+      const text = await translator.translate(validated.text, port.sender.tab.id, {
+        provider,
+        targetLanguage: validated.targetLanguage,
+        signal: controller.signal,
+        onProgress: (text) => send({ type: "progress", text }),
+      });
+      if (closed) return;
+      if (validated.targetLanguage === "en") {
+        finish({ type: "result", text });
+        return;
+      }
+      const cache = await receivedCache.save({ ...validated, provider }, text, { signal: controller.signal });
+      finish({ type: "result", text, cache });
+    }).catch((value) => finish({ type: "error", error: toErrorCode(value) }));
   });
   return true;
 }
@@ -86,7 +87,8 @@ export function registerChromeListeners(
 
   chromeApi.runtime.onConnect.addListener((port) => {
     if (port.name === REQUEST_PORT_NAME) {
-      connectRequestPort(port, chromeApi.runtime.id, translator, receivedCache);
+      connectRequestPort(port, chromeApi.runtime.id, translator, receivedCache,
+        () => readProvider(chromeApi.storage.local));
       return;
     }
     bridgeRegistry.connect(
@@ -111,7 +113,9 @@ export function registerChromeListeners(
       respond({ status: "miss", error: "invalid_input" });
       return false;
     }
-    void receivedCache.lookup(validated).then(respond);
+    void readProvider(chromeApi.storage.local)
+      .then((provider) => receivedCache.lookup({ ...validated, provider }))
+      .then(respond, () => respond({ status: "miss", error: "cache_read_failed" }));
     return true;
   });
   void receivedCache.cleanup();
@@ -119,7 +123,7 @@ export function registerChromeListeners(
   if (chromeApi.runtime.onInstalled?.addListener) {
     chromeApi.runtime.onInstalled.addListener((details) => {
       if (details?.reason === "install") {
-        void chromeApi.storage?.local?.set?.({ enabled: false });
+        void chromeApi.storage?.local?.set?.({ enabled: false, provider: "local" });
       }
     });
   }

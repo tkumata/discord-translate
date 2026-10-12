@@ -1,3 +1,5 @@
+import { translationCacheSource } from "./translation-provider.js";
+
 export const RECEIVED_CACHE_PREFIX = "receivedTranslation:v1:";
 export const RECEIVED_CACHE_TTL_MS = 5 * 24 * 60 * 60 * 1000;
 export const CACHE_STORAGE_TIMEOUT_MS = 5_000;
@@ -31,7 +33,7 @@ export function createReceivedTranslationCache(storage, {
   }
 
   async function keyFor(message) {
-    const hash = await hashImpl(JSON.stringify(["ja", message.text.trim()]));
+    const hash = await hashImpl(translationCacheSource(message.provider ?? "local", "ja", message.text.trim()));
     return `${RECEIVED_CACHE_PREFIX}${message.messageId}:${hash}`;
   }
 

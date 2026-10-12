@@ -511,3 +511,39 @@ content fixtureは非公開関数をsourceへ追記せず、Manifest順の実scr
 この報告を根拠に今回の実Chrome受け入れを合格とし、ユーザの指定により本変更を完了とする。
 エージェントによる実Chrome操作と、個別の操作状態・異常系の実機試験内訳は未確認である。
 残る可読性の改善は今後の別作業とし、今回の完了範囲へ追加しない。
+
+
+## 17. ローカル / ChatGPT の選択 (2026-10-12)
+
+状態: 完了。判断は ADR-009 を正本とする。
+Node test 91件成功。補助と実 API による固定文の日訳・英訳は成功。2026-10-12のユーザ実機動作確認により、本変更の実 Chrome 受け入れは合格。
+旧節のローカル専用条件は SPEC-PROVIDER-001〜004 で拡張する。
+
+```text
+Discord UI -> worker / 単一FIFO / provider別cache -> hidden bridge
+                                                     | local
+                                                     +-> MLX :8080
+                                                     | chatgpt
+                                                     +-> 補助 :8766 -> OpenAI Responses
+popup -> provider保存 / 接続状態 / 補助の認証開始・切断
+```
+
+| 所有者 | 責務 |
+| --- | --- |
+| popup | 選択、接続状態、同意説明、選択先の有効化確認、認証タブ。 |
+| worker | 設定の読取り、受付時のprovider固定、既存sender検証と配線。 |
+| queue | provider別dedupe / LRU。共通FIFOとtimeoutを維持する。 |
+| bridge | providerから固定loopback URLを選ぶ。HTTP/SSEとabortを所有する。 |
+| 受信保存処理 | provider別のhashを使い、旧local keyを維持する。 |
+| content起動 | provider変更で既存OFF lifecycleを実行する。 |
+| `chatgpt-auth.mjs` | host ID、OAuth、JWT、atomic保存、refresh、切断。 |
+| `chatgpt-server.mjs` | loopback境界、固定翻訳受付、Responses SSEの変換。 |
+
+ローカルの HTTP を補助経由へ移さない。
+認証 tokens と OpenAI 通信を extension に追加しない。
+settings、bridge、queue、cache の既存境界を再利用する。
+補助は単一プロセスで使用し、listener の重複起動を拒否する。
+認証の遅延保存は世代照合と直列ファイル置換で防ぐ。
+補助の切断は実行中の fetch を abort する。
+新しい汎用 provider framework や cache 層は作らない。
+完了記録は `docs/plans/active/2026-10-12-chatgpt-translation.md` に保持する。

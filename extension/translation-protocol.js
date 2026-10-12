@@ -12,6 +12,8 @@ export const ERROR_CODES = Object.freeze([
   "network_error",
   "http_error",
   "invalid_response",
+  "chatgpt_auth_required",
+  "chatgpt_usage_limit",
 ]);
 
 const SYSTEM_PROMPT =

@@ -7,6 +7,20 @@
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
+    <label for="provider">翻訳先
+      <select id="provider">
+        <option value="local">ローカル</option>
+        <option value="chatgpt">ChatGPT</option>
+      </select>
+    </label>
+    <section id="chatgpt" hidden aria-label="ChatGPT 接続">
+      <p>翻訳する本文を OpenAI に送信し、ChatGPT の利用枠を使います。</p>
+      <p id="account-status" role="status">未接続</p>
+      <button id="connect" type="button">Continue with ChatGPT</button>
+      <button id="refresh" type="button">接続状態を確認</button>
+      <button id="disconnect" type="button">切断</button>
+      <p><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT の利用量を管理</a></p>
+    </section>
     <label>
       <input id="enabled" type="checkbox">
       有効

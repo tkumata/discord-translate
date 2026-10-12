@@ -1,3 +1,5 @@
+import { COMPANION_URL, COMPANION_HEADERS, validateProvider } from "./translation-provider.js";
+
 export const HEALTH_URL = "http://127.0.0.1:8080/health";
 export const HEALTH_TIMEOUT_MS = 5_000;
 export const HEALTH_ERROR_CODES = Object.freeze([
@@ -6,6 +8,8 @@ export const HEALTH_ERROR_CODES = Object.freeze([
   "health_network_error",
   "health_http_error",
   "health_invalid_response",
+  "chatgpt_not_connected",
+  "chatgpt_unavailable",
 ]);
 
 function isStrictHealthyPayload(payload) {
@@ -91,12 +95,34 @@ const STATUS_MESSAGES = Object.freeze({
   health_network_error: "翻訳サーバへ接続できませんでした",
   health_http_error: "翻訳サーバが正常な応答を返しませんでした",
   health_invalid_response: "翻訳サーバの応答を確認できませんでした",
+  chatgpt_not_connected: "ChatGPT に接続し、利用枠の使用を許可してください",
+  chatgpt_unavailable: "ChatGPT 用の補助プログラムを起動してください",
 });
 
-function mountPopup({
+export async function requestCompanion(path, method = "GET", fetchImpl = globalThis.fetch) {
+  if (!["/status", "/auth/start", "/auth/logout"].includes(path)) throw new Error("invalid_input");
+  const response = await fetchImpl(`${COMPANION_URL}${path}`, {
+    method, headers: COMPANION_HEADERS, signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status !== 200) throw new Error(response.status === 401 ? "chatgpt_not_connected" : "chatgpt_unavailable");
+  return response.json();
+}
+
+export async function checkChatGPT(request = requestCompanion) {
+  try {
+    const status = await request("/status");
+    return status?.connected === true && typeof status.model === "string" && status.model.length > 0
+      ? { ok: true } : { ok: false, error: "chatgpt_not_connected" };
+  } catch (value) {
+    return { ok: false, error: value.message === "chatgpt_not_connected" ? "chatgpt_not_connected" : "chatgpt_unavailable" };
+  }
+}
+
+export function mountPopup({
   documentApi = globalThis.document,
   chromeApi = globalThis.chrome,
   healthCheck = checkHealth,
+  companionRequest = requestCompanion,
 } = {}) {
   const enabledInput = documentApi?.querySelector?.("#enabled");
   if (!enabledInput || !chromeApi?.storage?.local) return false;
@@ -104,6 +130,37 @@ function mountPopup({
   const statusElement = documentApi.querySelector("#status");
   const errorCodeElement = documentApi.querySelector("#error-code");
   const setEnabled = (value) => chromeApi.storage.local.set({ enabled: value });
+  const providerInput = documentApi.querySelector("#provider");
+  const chatgptSection = documentApi.querySelector("#chatgpt");
+  const accountStatus = documentApi.querySelector("#account-status");
+  const connectButton = documentApi.querySelector("#connect");
+  const disconnectButton = documentApi.querySelector("#disconnect");
+  const refreshButton = documentApi.querySelector("#refresh");
+  let provider = "local";
+
+  function showProvider() {
+    if (providerInput) providerInput.value = provider;
+    if (chatgptSection) chatgptSection.hidden = provider !== "chatgpt";
+  }
+
+  async function refreshConnection() {
+    const state = await companionRequest("/status");
+    if (typeof state?.connected !== "boolean" ||
+        (state.connected && (typeof state.model !== "string" || typeof state.account !== "string"))) {
+      throw new Error("chatgpt_unavailable");
+    }
+    if (accountStatus) accountStatus.textContent = state.connected
+      ? `接続済み: ${state.account} / ${state.model}` : "未接続";
+    return state;
+  }
+
+  async function runAction(action) {
+    const controls = [enabledInput, providerInput, connectButton, disconnectButton, refreshButton].filter(Boolean);
+    controls.forEach((element) => { element.disabled = true; });
+    try { await action(); }
+    catch { showProvider(); showStatus("操作に失敗しました。補助プログラムと接続状態を確認してください"); }
+    finally { controls.forEach((element) => { element.disabled = false; }); }
+  }
 
   function showStatus(message, code = null) {
     if (statusElement) statusElement.textContent = message;
@@ -114,9 +171,16 @@ function mountPopup({
 
   async function loadState() {
     try {
-      const state = await chromeApi.storage.local.get({ enabled: false });
+      const state = await chromeApi.storage.local.get({ enabled: false, provider: "local" });
+      provider = validateProvider(state.provider);
+      showProvider();
       enabledInput.checked = state.enabled === true;
       showStatus(enabledInput.checked ? "有効" : "無効");
+      if (provider === "chatgpt") {
+        try { await refreshConnection(); }
+        catch (value) { if (accountStatus) accountStatus.textContent = value.message === "chatgpt_not_connected"
+          ? "ChatGPT に再接続してください" : "補助プログラムを起動してください"; }
+      }
     } catch {
       enabledInput.checked = false;
       showStatus("設定を読み込めませんでした", "health_network_error");
@@ -124,29 +188,63 @@ function mountPopup({
   }
 
   enabledInput.addEventListener("change", () => {
-    if (!enabledInput.checked) {
-      void disableTranslation({ setEnabled })
-        .then(() => showStatus("無効"))
-        .catch(() => showStatus("設定を保存できませんでした"));
-      return;
-    }
-
-    enabledInput.disabled = true;
-    showStatus("接続確認中…");
-    void enableTranslation({ healthCheck, setEnabled })
-      .then((state) => {
+    void runAction(async () => {
+      if (!enabledInput.checked) {
+        await disableTranslation({ setEnabled });
+        showStatus("無効");
+        return;
+      }
+      showStatus("接続確認中…");
+      try {
+        const state = await enableTranslation({
+          healthCheck: provider === "local" ? healthCheck : () => checkChatGPT(companionRequest), setEnabled,
+        });
         enabledInput.checked = state.enabled;
         showStatus(state.enabled ? "有効" : STATUS_MESSAGES[state.error], state.error);
-        enabledInput.disabled = false;
-      })
-      .catch(() => {
+      } catch {
         enabledInput.checked = false;
-        enabledInput.disabled = false;
         showStatus("設定を保存できませんでした");
-      });
+      }
+    });
   });
 
-  void loadState();
+  providerInput?.addEventListener("change", () => {
+    const next = providerInput.value;
+    void runAction(async () => {
+      validateProvider(next);
+      await chromeApi.storage.local.set({ enabled: false, provider: next });
+      provider = next;
+      enabledInput.checked = false;
+      showProvider();
+      showStatus("無効。有効を ON にすると選択した翻訳先を使用します");
+      if (provider === "chatgpt") await refreshConnection();
+    });
+  });
+  connectButton?.addEventListener("click", () => {
+    void runAction(async () => {
+      const state = await companionRequest("/auth/start", "POST");
+      const url = new URL(state.url);
+      if (url.origin !== COMPANION_URL || url.pathname !== "/auth/login" || url.hash || url.username || url.password) {
+        throw new Error("invalid_response");
+      }
+      await chromeApi.tabs.create({ url: url.href });
+      showStatus("認証後にポップアップを開き直し、有効を ON にしてください");
+    });
+  });
+  refreshButton?.addEventListener("click", () => { void runAction(refreshConnection); });
+  disconnectButton?.addEventListener("click", () => {
+    void runAction(async () => {
+      await setEnabled(false);
+      enabledInput.checked = false;
+      const state = await companionRequest("/auth/logout", "POST");
+      if (state?.connected !== false || typeof state.revoked !== "boolean") throw new Error("invalid_response");
+      if (accountStatus) accountStatus.textContent = "未接続";
+      showStatus(state.revoked ? "切断しました" :
+        "端末内の接続を削除しました。遠隔失効は未確認です。ChatGPT 設定でも接続を解除してください");
+    });
+  });
+
+  void runAction(loadState);
   return true;
 }
 

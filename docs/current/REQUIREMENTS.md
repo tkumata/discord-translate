@@ -3,7 +3,7 @@
 2026-10-02に順次表示を承認・実装した。追加要求は第7節を参照する。自動・実モデル検証は成功、実ChromeもユーザーのTask 5実機確認により合格し、本変更は完了した。
 
 - Status: Current
-- Last reviewed: 2026-10-05
+- Last reviewed: 2026-10-12
 - Approved addition: 第8節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第10節は完了。実機受け入れはユーザの再確認で合格。
 - Product: Discord ローカル日本語翻訳
@@ -273,3 +273,37 @@ CSSの配色を修正した。
 2026-10-05、ユーザは実機再確認の合格とタスク完了を指定した。
 個別の操作状態の試験内訳とコントラストの実測値は未報告である。
 Open Questions: なし。
+
+
+## 11. ローカル / ChatGPT の選択 (2026-10-12)
+
+状態: 完了。Node test 91件成功。補助と実 API による固定文の日訳・英訳は成功。2026-10-12のユーザ実機動作確認により、本変更の実 Chrome 受け入れは合格。
+本節はローカル専用の要求と制約に選択可能な例外を設ける。
+REQ-N-001、005 と AC-007 の offline 条件はローカルに適用する。
+REQ-F-009、014、015 の接続先と popup 制限は本節で拡張する。
+CON-003 の例外として ChatGPT 認証・翻訳専用の補助を追加する。
+ローカルの公式 MLX サーバは維持する。
+
+| ID | 要求 | 仕様 |
+| --- | --- | --- |
+| REQ-P-001 | MUST: popup で local / chatgpt を選択し、初期値は local とする。 | SPEC-PROVIDER-001 |
+| REQ-P-002 | MUST: ChatGPT 時は本文の外部送信と利用枠の消費を明示する。 | SPEC-PROVIDER-001 |
+| REQ-P-003 | MUST: 公開 OAuth と利用許可で認証し、tokens を保護した端末内ファイルに保存する。 | SPEC-PROVIDER-002 |
+| REQ-P-004 | MUST: Node 標準機能の補助が外部通信を所有し、固定翻訳用途だけを受け付ける。 | SPEC-PROVIDER-003 |
+| REQ-P-005 | MUST: 切断後の遅延 callback / refresh で認証情報を復活させない。 | SPEC-PROVIDER-002 |
+| REQ-P-006 | MUST: 翻訳先別に cache と job を区別し、切替時の古い表示を破棄する。 | SPEC-PROVIDER-004 |
+| REQ-P-007 | MUST: 既存のローカル翻訳、入力検証、timeout、手動操作、5日保存を維持する。 | SPEC-PROVIDER-001〜004 |
+
+| 受け入れ条件 | 検証 |
+| --- | --- |
+| 未接続では ChatGPT を有効化しない。local は MLX health を使う。 | popup の動作 test |
+| 不正 state、claims、署名、scope、origin、payload を拒否する。 | 署名付き fixture / HTTP test |
+| refresh を直列化し、切断後の保存を拒否する。 | 非同期競合 test |
+| 完了前の切断、incomplete、usage 欠落を cache しない。 | streaming test |
+| provider が異なる同文を dedupe / 復元しない。 | queue / cache / worker test |
+| 切替で古い結果を適用せず、入力欄の下書きを保持する。 | content lifecycle test |
+| 実サインインと実翻訳が成功する。 | 認証と実機動作はユーザ報告で合格。固定文の日訳・英訳は実 API で成功 |
+| Chrome 上で選択、LNA、切断、両翻訳先を操作できる。 | 本変更の実機受け入れはユーザ報告で合格。個別操作の試験内訳は未報告 |
+
+2026-10-12、ユーザは実機で動作確認できたと報告し、完了を指示した。
+エージェント自身の実 Chrome 操作、個別の異常系、利用枠上限と長文品質の実機検証は行っていない。

@@ -3,7 +3,7 @@
 2026-10-02承認のstreamingを実装済み。第12節に通信・表示の詳細と入力KV cacheの実機確認結果を記載する。実ChromeもユーザーのTask 5実機確認により合格した。
 
 - Status: Current
-- Last reviewed: 2026-10-05
+- Last reviewed: 2026-10-12
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
 
@@ -609,3 +609,119 @@ popup、訳文ブロック、案内文の配色は変更対象外とする。
 2026-10-05、ユーザは修正後の実機再確認で合格と報告した。
 実機受け入れはユーザ報告により合格とし、タスク完了とする。
 個別の操作状態の試験内訳とコントラストの実測値は未報告である。
+
+
+## 16. ローカル / ChatGPT の選択 (2026-10-12)
+
+状態: 完了。Node test 91件、Python self-check、JS構文とmanifest JSONの検証は成功。実 API と補助による固定文の日訳・英訳は成功。2026-10-12のユーザ実機動作確認により、本変更の実 Chrome 受け入れは合格。
+本節は旧節の固定接続先、popup、権限、外部通信の条件を拡張する。
+本節で変更しないローカルの契約は維持する。
+
+### SPEC-PROVIDER-001 選択と有効化
+
+- MUST: `chrome.storage.local` に `provider` を保存する。
+- MUST: 未設定の provider は `local` とする。不正値は拒否する。
+- MUST: popup にローカルと ChatGPT の選択を表示する。
+- MUST: 選択変更時は OFF にして、利用者が改めて ON にする。
+- MUST: local の ON は既存 MLX health を使用する。
+- MUST: chatgpt の ON は補助の接続・利用許可・model を確認する。
+- MUST: ChatGPT の本文送信、利用枠、利用量設定リンクを表示する。
+- MUST: 接続は `Continue with ChatGPT`、切断は専用 button とする。
+- MUST: 切断では OFF にする。遠隔失効が未確認の場合は案内を表示する。
+- MUST: 失敗で自動的に別翻訳先や別の課金方法へ切り替えない。
+
+### SPEC-PROVIDER-002 認証と保管
+
+補助は `http://127.0.0.1:8766/auth/callback` で OAuth を受信する。
+PKCE S256、state、nonce と10分の一回限り認証試行を使用する。
+初回は dynamic registration を使い、issued client ID を保持する。
+同じ接続の再認証は issued ID と検証済み subject を照合する。
+ID token は OpenAI の discovery / JWKS と RS256 署名で検証する。
+issuer、audience、expiration、issued-at、nonce、subject を検証する。
+利用可否は token response の granted scopes で判定する。
+access token は有効期限前に単一の refresh 処理で更新する。
+更新 token 一式を atomic に置換する。
+model は認証時の選択を保持し、refresh 時の別 API 障害で更新 token を失わない。
+保存 directory は `~/.config/discord-translate`、権限は0700とする。
+状態ファイルは0600で保存し、host ID と接続情報を保持する。
+切断後も host ID と接続の client / subject 対応は保持する。
+認証世代を照合し、古い callback / refresh の保存を拒否する。
+切断では実行中の外部要求を中断し、tokens を削除する。
+切断の削除保存は直後の再認証開始で取り消さず、後続保存との順序を保つ。
+renewable session の失効失敗を成功扱いにしない。
+本文、tokens、authorization URL、例外詳細はログへ出さない。
+
+### SPEC-PROVIDER-003 補助の HTTP と推論
+
+起動は `CORS_ORIGIN=chrome-extension://<ID> node scripts/chatgpt-server.mjs`。
+Node.js 22 以上の標準機能を使い、追加 package は導入しない。
+listener と callback は固定の `127.0.0.1:8766` とする。
+Host は listener と一致させる。CORS は指定拡張 origin だけを許可する。
+通常 API は `X-Discord-Translate: 1` を要求する。
+Origin がある場合は完全一致を要求し、`null` を拒否する。
+Origin がない独自 header 付き要求は同機プロセスとして扱う。
+login / callback GET は認証試行で認可し、他のページ操作を認めない。
+
+| 経路 | 動作 |
+| --- | --- |
+| `GET /status` | tokens を含まない接続状態と使用 model を返す。 |
+| `POST /auth/start` | 認証試行を生成し、loopback login URL だけを返す。 |
+| `GET /auth/login` | 試行を照合し、OpenAI の認証へ redirect する。 |
+| `GET /auth/callback` | code を交換・検証し、固定メッセージを返す。 |
+| `POST /auth/logout` | session 失効を試み、tokens を削除する。 |
+| `POST /v1/chat/completions` | 固定翻訳 payload を Responses API へ変換する。 |
+
+推論は公開 `https://api.openai.com/v1/responses` だけを使用する。
+`instructions` と user input を渡し、`store:false`、`stream:true` とする。
+ローカルの sampling / token 設定を OpenAI へ転送しない。
+利用可能なモデル一覧の先頭の表示対象 model を使う。
+受け付ける prompt は既存の日本語 / 英語の固定翻訳 prompt だけとする。
+本文は8000 UTF-16コード単位、累積訳は64KiBを上限とする。
+要求 body は64KiB、SSE event は1MiBを上限とする。
+全推論と bridge の timeout は120秒とする。
+`response.completed`、内部 completed status、出力と usage を検証する。
+最終 output が空配列の場合だけ、先に受信した単一の完成済み
+`response.output_item.done.item` を使う。ID / index と累積 delta の一致、
+assistant / completed / 単一 output_text を検証する。
+最終 output が非空の場合の照合は維持する。item 完了だけでは成功にしない。
+上流 Content-Type の欠落は許容するが、明示的な非 SSE 型は拒否する。
+欠落時も SSE 構文、出力と最終完了を検証し、bridge へ SSE 型を付けて返す。
+EOF、failed、incomplete、refusal、tool 出力は失敗とする。
+変換後は既存 choices / usage / `[DONE]` の SSE 契約を使用する。
+401/403 は再接続、429 は利用量設定の確認を案内する固定 code とする。
+
+### SPEC-PROVIDER-004 job、cache、切替
+
+worker は要求受付時の provider を job と保存処理へ固定する。
+Content から任意の provider / endpoint を受け付けない。
+job と memory cache の key は provider を区別する。
+local の旧 hash と保存 key は維持し、旧受信訳を利用できる。
+chatgpt の hash に provider を加え、local と共有しない。
+保存期限、容量失敗、投稿訳の非保存は維持する。
+選択変更時は既存の OFF lifecycle で表示と購読を破棄する。
+下書き本文を変更せず、再 ON で選択先の保存訳を検索する。
+切替前に受付済みの job は元の provider を保持する。
+共有 job の個別購読解除契約は変更しない。
+切断済み bridge と画面へ古い結果を適用しない。
+
+Manifest は `http://127.0.0.1:8766/*` を追加する。
+外部 OpenAI origin の host permission と新しい API permission は追加しない。
+popup の認証操作で本文を送信しない。
+Chrome storage に provider と既存データを保存し、tokens は保存しない。
+
+#### 2026-10-12 実 API の応答形式と修正検証
+
+認証後の `http_error` を調査した。公開 Responses API は HTTP 200 の
+SSE を返したが Content-Type がなく、最終 `response.completed` の
+output は空配列だった。完成 message は `response.output_item.done` にあり、
+usage は最終 event に含まれていた。旧補助は header の必須検査で502を返し、
+header の条件だけを外しても旧 converter は空 output を拒否する。
+`store:false` が原因と断定せず、観測した応答への限定互換処理とする。
+固定 fixture で旧 converter の失敗を再現し、上記検証条件を維持して修正した。
+Node test 91件成功。修正済み補助を一時 loopback port で実行し、既存の
+実アカウントによる固定文の日訳・英訳で HTTP 200、正常 completed、usage、
+bridge 用 SSE と `[DONE]` を確認した。本文・訳文・tokens は出力していない。
+エージェントは稼働中の補助プロセスの置換と実 Chrome の操作を行っていない。
+その後、2026-10-12にユーザが実機での動作確認成功と完了を報告した。
+この報告に基づき本変更の実 Chrome 受け入れを合格とし、タスクを完了する。
+個別の操作・異常系の試験内訳、利用枠上限と長文品質の実機検証は未確認である。

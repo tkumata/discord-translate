@@ -7,6 +7,7 @@ import {
   validateResponse,
   validateTargetLanguage,
 } from "./translation-protocol.js";
+import { translationCacheSource, validateProvider } from "./translation-provider.js";
 
 export const FETCH_TIMEOUT_MS = 120_000;
 export const QUEUE_WAIT_TIMEOUT_MS = 120_000;
@@ -48,6 +49,7 @@ export async function runTranslationRequest(
     clearTimeoutImpl = (...args) => globalThis.clearTimeout(...args),
     onProgress,
     targetLanguage = "ja",
+    provider = "local",
   } = {},
 ) {
   const controller = new AbortController();
@@ -66,6 +68,12 @@ export async function runTranslationRequest(
       onChunk: (chunk) => stream.push(chunk),
     });
     if (!response || response.status !== 200) {
+      if (provider === "chatgpt" && [401, 403].includes(response?.status)) {
+        throw new TranslationError("chatgpt_auth_required");
+      }
+      if (provider === "chatgpt" && response?.status === 429) {
+        throw new TranslationError("chatgpt_usage_limit");
+      }
       throw new TranslationError("http_error");
     }
     stream.lastPayload = stream.response();
@@ -119,17 +127,18 @@ export class TranslationQueue {
     this.running = false;
   }
 
-  translate(text, tabId = null, { onProgress, signal, targetLanguage = "ja" } = {}) {
+  translate(text, tabId = null, { onProgress, signal, targetLanguage = "ja", provider = "local" } = {}) {
     let normalized;
     try {
       normalized = normalizeText(text);
       validateTargetLanguage(targetLanguage);
+      validateProvider(provider);
     } catch (value) {
       return Promise.reject(value);
     }
 
     const promise = new Promise((resolve, reject) => {
-      this.pendingHashRequests.push({ text: normalized, targetLanguage, tabId, onProgress, signal, resolve, reject });
+      this.pendingHashRequests.push({ text: normalized, targetLanguage, provider, tabId, onProgress, signal, resolve, reject });
     });
     this.processHashRequests();
     return promise;
@@ -142,7 +151,7 @@ export class TranslationQueue {
     while (this.pendingHashRequests.length > 0) {
       const request = this.pendingHashRequests.shift();
       try {
-        const key = await this.hashImpl(JSON.stringify([request.targetLanguage, request.text]));
+        const key = await this.hashImpl(translationCacheSource(request.provider, request.targetLanguage, request.text));
         Promise.resolve(this.enqueue(key, request.text, request.tabId, request)).then(request.resolve, request.reject);
       } catch (value) {
         request.reject(value);
@@ -172,6 +181,7 @@ export class TranslationQueue {
       key,
       text,
       targetLanguage: options.targetLanguage,
+      provider: options.provider,
       tabId,
       promise,
       resolve: resolvePromise,
@@ -267,7 +277,8 @@ export class TranslationQueue {
   run(job) {
     runTranslationRequest(job.text, {
       targetLanguage: job.targetLanguage,
-      requestImpl: (payload, options) => this.requestImpl(job.tabId, payload, options),
+      provider: job.provider,
+      requestImpl: (payload, options) => this.requestImpl(job.tabId, payload, { ...options, provider: job.provider }),
       logger: this.logger,
       timeoutMs: this.fetchTimeoutMs,
       setTimeoutImpl: this.setTimeoutImpl,

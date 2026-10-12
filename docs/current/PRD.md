@@ -1,7 +1,7 @@
 # PRD: Discord ローカル日本語翻訳
 
 - Status: Current product definition
-- Last reviewed: 2026-10-05
+- Last reviewed: 2026-10-12
 - Approved addition: 投稿前の英語翻訳は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - 2026-10-02: 順次表示を承認・実装済み。自動検証と実モデル検証は成功、実ChromeもユーザーのTask 5実機確認により合格・本変更完了。第11節を参照する。
 - Product maturity: Streaming manual translation implemented and tested; Task 5 Chrome acceptance confirmed by user
@@ -180,3 +180,16 @@ headless unpacked load、実ID preflight、実Chrome health、sender URL hotfix�
 既存機能の承認状態は変更しない。
 詳細は[追加要求](REQUIREMENTS.md#9-受信翻訳文の5日間保持案2026-10-05)を参照する。
 実装範囲は[実装計画](../plans/active/2026-10-05-received-translation-cache.md)を参照する。
+
+
+## 14. ローカル / ChatGPT の選択 (2026-10-12)
+
+状態: 完了。自動検証と補助・実 API による固定文翻訳は成功。2026-10-12のユーザ実機動作確認により、本変更の実 Chrome 受け入れは合格。
+利用者は既存の翻訳操作で翻訳先を選びたい。
+初期値はローカルとする。
+ChatGPT 選択時だけ、認証と同意に基づき本文を OpenAI へ送信する。
+外部サービス禁止の非ゴールと成功指標はローカルに適用する。
+ChatGPT 選択時の例外は ADR-009 と SPEC-PROVIDER-001〜004 に従う。
+自動翻訳、自動投稿、API key、複数アカウント UI は追加しない。
+ChatGPT の会話画面、履歴、メモリへのアクセスは提供しない。
+認証と実機動作の成功はユーザ報告で確認し、ユーザの指示により本変更を完了した。

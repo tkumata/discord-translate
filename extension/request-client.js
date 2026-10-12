@@ -1,5 +1,11 @@
 const MAX_TRANSLATION_INPUT_LENGTH = 8000;
 
+function translationFailureMessage(code) {
+  const guidance = code === "chatgpt_auth_required" ? "ポップアップから ChatGPT に再接続してください。" :
+    code === "chatgpt_usage_limit" ? "ポップアップの「ChatGPT の利用量を管理」で利用枠を確認してください。" : "";
+  return `翻訳できませんでした（${code}）${guidance}`;
+}
+
 const openTranslationRequest = (() => {
   const TRANSLATION_ERROR_CODES = new Set([
     "invalid_sender",
@@ -13,6 +19,8 @@ const openTranslationRequest = (() => {
     "network_error",
     "http_error",
     "invalid_response",
+    "chatgpt_auth_required",
+    "chatgpt_usage_limit",
   ]);
 
   function responseKeys(value) {

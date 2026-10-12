@@ -93,6 +93,9 @@ async function initialize() {
 
 if (typeof window !== "undefined" && typeof chrome !== "undefined" && isDiscordTopFrame()) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.provider) {
+      applyEnabled(false);
+    }
     if (areaName === "local" && typeof changes.enabled?.newValue === "boolean") {
       applyEnabled(changes.enabled.newValue);
     }

@@ -121,7 +121,7 @@ function createDraftComposer(openRequest) {
     const fail = (code) => {
       if (!isCurrent()) return;
       cancelComposerRequest(record);
-      record.status = `翻訳できませんでした（${code}）`;
+      record.status = translationFailureMessage(code);
       refreshComposer(record);
     };
     record.close = openRequest({ type: "translateDraft", text: source.trim() }, async (message) => {

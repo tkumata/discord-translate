@@ -3,6 +3,7 @@ import {
   isPlainObject,
   validateBridgePortSender,
 } from "./translation-protocol.js";
+import { validateProvider } from "./translation-provider.js";
 
 export const BRIDGE_PORT_NAME = "discord-translate-bridge";
 export const BRIDGE_CONNECT_TIMEOUT_MS = 5_000;
@@ -60,7 +61,9 @@ export class BridgeRegistry {
     this.pending = new Map();
   }
 
-  request(tabId, payload, { signal, onChunk } = {}) {
+  request(tabId, payload, { signal, onChunk, provider = "local" } = {}) {
+    try { validateProvider(provider); }
+    catch (value) { return Promise.reject(value); }
     if (!Number.isInteger(tabId)) return Promise.reject(new TranslationError("bridge_unavailable"));
     const jobId = createJobId();
     return new Promise((resolve, reject) => {
@@ -68,6 +71,7 @@ export class BridgeRegistry {
         jobId,
         tabId,
         payload,
+        provider,
         signal,
         onChunk,
         entry: null,
@@ -130,7 +134,8 @@ export class BridgeRegistry {
       item.timer = null;
     }
     try {
-      entry.port.postMessage({ type: "translate", jobId: item.jobId, payload: item.payload });
+      entry.port.postMessage({ type: "translate", jobId: item.jobId, payload: item.payload,
+        ...(item.provider === "chatgpt" ? { provider: item.provider } : {}) });
     } catch {
       this.finish(item, new TranslationError("bridge_unavailable"));
     }

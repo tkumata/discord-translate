@@ -132,7 +132,7 @@ function createReceivedMessages(openRequest) {
     element.className = "discord-translate-error";
 
     const message = document.createElement("span");
-    message.textContent = `翻訳できませんでした（${errorCode}）`;
+    message.textContent = translationFailureMessage(errorCode);
     message.setAttribute("role", "status");
     message.setAttribute("aria-live", "polite");
     const retry = document.createElement("button");
