@@ -196,17 +196,17 @@ function createReceivedMessages(openRequest) {
       if (closed) return;
       record.close();
       if (!currentRecord(content, container, record)) return;
-      const code = response?.error;
-      if (validCacheHit(response)) {
+      const hit = validCacheHit(response);
+      const code = hit || validCacheMiss(response) ? response.error : "cache_read_failed";
+      if (hit) {
         record.state = "succeeded";
         showTranslation(content, record, response.text);
-        showCacheWarning(record, code);
       } else {
         record.state = "idle";
         showButton(content, container, record);
-        showCacheWarning(record, validCacheMiss(response)
-          ? code : "cache_read_failed");
       }
+      if (code === "cache_read_failed") console.warn(code);
+      else showCacheWarning(record, code);
     };
     try {
       chrome.runtime.sendMessage({ type: "lookupTranslation", messageId: record.messageId, text: record.text }, (response) => {

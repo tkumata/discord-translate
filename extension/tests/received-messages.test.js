@@ -362,12 +362,41 @@ test("completed translations are removed when a reused container changes identit
   assert.equal(ui(container), undefined);
 });
 
+test("new messages log automatic cache read failures without showing errors or translating", async () => {
+  for (const failure of [
+    { lookup: () => ({ status: "miss", error: "cache_read_failed" }) },
+    { lookup: () => undefined },
+    { lookup: () => ({ status: "hit", text: "private translation", error: null, extra: "private details" }) },
+    { lookup: () => { throw new Error("private details"); } },
+    { runtimeError: { message: "private details" } },
+  ]) {
+    const env = await loadContentScript(undefined, failure);
+    const warnings = [];
+    env.context.console = { warn: (...args) => warnings.push(args) };
+    env.setEnabled(true);
+    env.context.chrome.runtime.lastError = failure.runtimeError;
+    const { container, content } = message(env.document, "chat-messages-1-2", "private source");
+    env.mutate();
+    env.mutate();
+    assert.equal(env.lookups.length, 1);
+    assert.equal(env.calls.length, 0);
+    assert.equal(ui(container, "cache-warning"), undefined);
+    assert.equal(ui(container, "error"), undefined);
+    assert.equal(ui(container, "translation"), undefined);
+    assert.equal(ui(container, "button").textContent, "翻訳");
+    assert.equal(ui(container, "button").disabled, false);
+    assert.equal(content.textContent, "private source");
+    assert.deepEqual(warnings, [["cache_read_failed"]]);
+    env.setEnabled(false);
+  }
+});
+
 test("storage read failures and timeout allow manual translation; write failures retain the completed text", async () => {
   const env = await loadContentScript(() => ({ ok: true, text: "完成訳", cache: { saved: false, error: "cache_write_failed" } }),
     { lookup: () => ({ status: "miss", error: "cache_read_failed" }) });
   const { container, content } = message(env.document, "chat-messages-1-2", "source");
   env.setEnabled(true);
-  assert.match(ui(container, "cache-warning").textContent, /cache_read_failed/);
+  assert.equal(ui(container, "cache-warning"), undefined);
   ui(container, "button").click();
   await flush();
   assert.equal(ui(container, "translation").children[1].textContent, "完成訳");
@@ -377,6 +406,8 @@ test("storage read failures and timeout allow manual translation; write failures
   assert.equal(ui(container, "error"), undefined);
 
   const pending = await loadContentScript(undefined, { lookup: () => new Promise(() => {}) });
+  const warnings = [];
+  pending.context.console = { warn: (...args) => warnings.push(args) };
   let timer;
   pending.context.setTimeout = (callback, ms) => { timer = { callback, ms }; return timer; };
   pending.context.clearTimeout = () => {};
@@ -384,7 +415,8 @@ test("storage read failures and timeout allow manual translation; write failures
   pending.setEnabled(true);
   assert.equal(timer.ms, 5000);
   timer.callback();
-  assert.match(ui(next.container, "cache-warning").textContent, /cache_read_failed/);
+  assert.equal(ui(next.container, "cache-warning"), undefined);
+  assert.deepEqual(warnings, [["cache_read_failed"]]);
   assert.equal(ui(next.container, "button").disabled, false);
   assert.equal(pending.calls.length, 0);
   pending.setEnabled(false);
@@ -395,7 +427,7 @@ test("malformed cache responses never render and corrupted result metadata keeps
   const { container } = message(env.document, "chat-messages-1-2", "source");
   env.setEnabled(true);
   assert.equal(ui(container, "translation"), undefined);
-  assert.match(ui(container, "cache-warning").textContent, /cache_read_failed/);
+  assert.equal(ui(container, "cache-warning"), undefined);
   ui(container, "button").click();
   env.ports[0].receive({ type: "result", text: "bad", cache: { saved: true, error: "private details" } });
   assert.equal(ui(container, "translation"), undefined);
