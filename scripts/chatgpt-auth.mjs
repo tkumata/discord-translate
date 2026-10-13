@@ -24,7 +24,7 @@ export async function readJsonResponse(response) {
     }
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
   } finally {
-    await reader.cancel().catch(() => {});
+    await reader.cancel().catch(() => { });
     reader.releaseLock();
   }
 }
@@ -46,12 +46,12 @@ export function verifyIdentity(token, jwks, { clientId, nonce, now = Date.now() 
   const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   const seconds = now / 1000;
   if (claims.iss !== ISSUER || !audience.includes(clientId) ||
-      (audience.length > 1 && claims.azp !== clientId) ||
-      !Number.isInteger(claims.exp) || claims.exp <= seconds ||
-      !Number.isInteger(claims.iat) || claims.iat > seconds + 5 ||
-      (claims.nbf !== undefined && (!Number.isInteger(claims.nbf) || claims.nbf > seconds + 5)) ||
-      (nonce !== undefined && claims.nonce !== nonce) ||
-      typeof claims.sub !== "string" || !claims.sub) fail("invalid_identity");
+    (audience.length > 1 && claims.azp !== clientId) ||
+    !Number.isInteger(claims.exp) || claims.exp <= seconds ||
+    !Number.isInteger(claims.iat) || claims.iat > seconds + 5 ||
+    (claims.nbf !== undefined && (!Number.isInteger(claims.nbf) || claims.nbf > seconds + 5)) ||
+    (nonce !== undefined && claims.nonce !== nonce) ||
+    typeof claims.sub !== "string" || !claims.sub) fail("invalid_identity");
   return claims;
 }
 
@@ -62,15 +62,17 @@ function hasPlanScope(scope) {
 
 function tokenSet(response, previous, now) {
   if (typeof response?.token_type !== "string" || response.token_type.toLowerCase() !== "bearer" ||
-      typeof response.access_token !== "string" || !response.access_token ||
-      typeof response.refresh_token !== "string" || !response.refresh_token ||
-      !Number.isInteger(response.expires_in) || response.expires_in <= 0) fail("invalid_tokens");
+    typeof response.access_token !== "string" || !response.access_token ||
+    typeof response.refresh_token !== "string" || !response.refresh_token ||
+    !Number.isInteger(response.expires_in) || response.expires_in <= 0) fail("invalid_tokens");
   const scope = response.scope === undefined ? previous?.scope : response.scope;
   if (!hasPlanScope(scope)) fail("chatgpt_auth_required");
   const idToken = response.id_token ?? previous?.idToken;
   if (typeof idToken !== "string" || !idToken) fail("invalid_tokens");
-  return { accessToken: response.access_token, refreshToken: response.refresh_token, idToken,
-    scope, expiresAt: now + response.expires_in * 1000 };
+  return {
+    accessToken: response.access_token, refreshToken: response.refresh_token, idToken,
+    scope, expiresAt: now + response.expires_in * 1000
+  };
 }
 
 export async function createChatGPTAuth({
@@ -89,14 +91,14 @@ export async function createChatGPTAuth({
     state = { hostId: `urn:uuid:${randomUUID()}`, registration: null, tokens: null, model: null };
   }
   if (!/^urn:uuid:[0-9a-f-]{36}$/.test(state?.hostId) ||
-      (state.registration !== null && (typeof state.registration?.clientId !== "string" ||
-        !state.registration.clientId.startsWith("oaiapp_") || typeof state.registration.subject !== "string" ||
-        !state.registration.subject || typeof state.registration.label !== "string")) ||
-      (state.tokens !== null && (!state.registration || !Number.isFinite(state.tokens.expiresAt) ||
-        !hasPlanScope(state.tokens.scope) || ["accessToken", "refreshToken", "idToken"].some(
-          (key) => typeof state.tokens[key] !== "string" || !state.tokens[key]))) ||
-      (state.tokens !== null && !state.model) ||
-      (state.model !== null && (typeof state.model !== "string" || !state.model))) fail("credential_read_failed");
+    (state.registration !== null && (typeof state.registration?.clientId !== "string" ||
+      !state.registration.clientId.startsWith("oaiapp_") || typeof state.registration.subject !== "string" ||
+      !state.registration.subject || typeof state.registration.label !== "string")) ||
+    (state.tokens !== null && (!state.registration || !Number.isFinite(state.tokens.expiresAt) ||
+      !hasPlanScope(state.tokens.scope) || ["accessToken", "refreshToken", "idToken"].some(
+        (key) => typeof state.tokens[key] !== "string" || !state.tokens[key]))) ||
+    (state.tokens !== null && !state.model) ||
+    (state.model !== null && (typeof state.model !== "string" || !state.model))) fail("credential_read_failed");
   let generation = 0;
   let pending = null;
   let refreshing = null;
@@ -118,7 +120,7 @@ export async function createChatGPTAuth({
         await unlink(temporary).catch((value) => { if (value.code !== "ENOENT") throw value; });
       }
     });
-    storageTail = task.catch(() => {});
+    storageTail = task.catch(() => { });
     await task;
   }
   await commit(state, generation);
@@ -171,8 +173,10 @@ export async function createChatGPTAuth({
       const expected = generation;
       const original = state;
       refreshing = (async () => {
-        const response = await exchange({ grant_type: "refresh_token", client_id: original.registration.clientId,
-          refresh_token: original.tokens.refreshToken });
+        const response = await exchange({
+          grant_type: "refresh_token", client_id: original.registration.clientId,
+          refresh_token: original.tokens.refreshToken
+        });
         const tokens = tokenSet(response, original.tokens, now());
         if (response.id_token !== undefined) {
           const claims = await identity(response.id_token, original.registration.clientId);
@@ -192,14 +196,18 @@ export async function createChatGPTAuth({
       pending = null;
       const config = await discovery();
       if (expected !== generation) fail("auth_cancelled");
-      const transaction = { generation: expected, state: randomValue(), nonce: randomValue(), verifier: randomValue(),
-        expiresAt: now() + 10 * 60_000, registration: state.registration };
+      const transaction = {
+        generation: expected, state: randomValue(), nonce: randomValue(), verifier: randomValue(),
+        expiresAt: now() + 10 * 60_000, registration: state.registration
+      };
       const url = new URL(config.authorization_endpoint);
-      url.search = new URLSearchParams({ client_id: transaction.registration?.clientId ?? "dynamic_agent_client",
-        ...(!transaction.registration ? { agent_name_hint: "Discord Local Translator" } : {}),
+      url.search = new URLSearchParams({
+        client_id: transaction.registration?.clientId ?? "dynamic_agent_client",
+        ...(!transaction.registration ? { agent_name_hint: "Discord Translator" } : {}),
         ext_agent_host_id: state.hostId, response_type: "code", redirect_uri: `${callbackOrigin}/auth/callback`,
         scope: SCOPES, resource: RESOURCE, state: transaction.state, nonce: transaction.nonce,
-        code_challenge_method: "S256", code_challenge: createHash("sha256").update(transaction.verifier).digest("base64url") }).toString();
+        code_challenge_method: "S256", code_challenge: createHash("sha256").update(transaction.verifier).digest("base64url")
+      }).toString();
       pending = { ...transaction, authorizationUrl: url.href };
       return { url: `${callbackOrigin}/auth/login?state=${transaction.state}` };
     },
@@ -211,23 +219,29 @@ export async function createChatGPTAuth({
 
     async callback(parameters) {
       if (!pending || pending.expiresAt <= now() || parameters.getAll("state").length !== 1 ||
-          parameters.get("state") !== pending.state) fail("invalid_state");
+        parameters.get("state") !== pending.state) fail("invalid_state");
       const transaction = pending;
       pending = null;
       if (parameters.has("error")) fail("auth_denied");
       const issued = parameters.get("client_id") ?? transaction.registration?.clientId;
       const code = parameters.get("code");
       if (!issued?.startsWith("oaiapp_") || !code || parameters.getAll("code").length !== 1 ||
-          parameters.getAll("client_id").length > 1 ||
-          (transaction.registration && issued !== transaction.registration.clientId)) fail("invalid_identity");
-      const response = await exchange({ grant_type: "authorization_code", client_id: issued, code,
-        code_verifier: transaction.verifier, redirect_uri: `${callbackOrigin}/auth/callback` });
+        parameters.getAll("client_id").length > 1 ||
+        (transaction.registration && issued !== transaction.registration.clientId)) fail("invalid_identity");
+      const response = await exchange({
+        grant_type: "authorization_code", client_id: issued, code,
+        code_verifier: transaction.verifier, redirect_uri: `${callbackOrigin}/auth/callback`
+      });
       const tokens = tokenSet(response, null, now());
       const claims = await identity(tokens.idToken, issued, transaction.nonce);
       if (transaction.registration && claims.sub !== transaction.registration.subject) fail("invalid_identity");
       const model = await modelFor(tokens);
-      await commit({ ...state, registration: { clientId: issued, subject: claims.sub,
-        label: typeof claims.email === "string" ? claims.email : claims.sub }, tokens, model }, transaction.generation);
+      await commit({
+        ...state, registration: {
+          clientId: issued, subject: claims.sub,
+          label: typeof claims.email === "string" ? claims.email : claims.sub
+        }, tokens, model
+      }, transaction.generation);
     },
 
     async status() {
@@ -253,8 +267,10 @@ export async function createChatGPTAuth({
           const config = await discovery();
           const response = await fetchImpl(config.revocation_endpoint, {
             method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ token: previous.tokens.refreshToken, token_type_hint: "refresh_token",
-              client_id: previous.registration.clientId }), signal: AbortSignal.timeout(10_000), redirect: "error",
+            body: new URLSearchParams({
+              token: previous.tokens.refreshToken, token_type_hint: "refresh_token",
+              client_id: previous.registration.clientId
+            }), signal: AbortSignal.timeout(10_000), redirect: "error",
           });
           revoked = response.status === 200;
           await response.body?.cancel();

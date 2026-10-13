@@ -1,4 +1,4 @@
-# Discord Local Translator
+# Discord Translator
 
 Discord Web の受信メッセージを日本語へ、投稿前の日本語の下書きを英語へ翻訳する Chrome 拡張機能です。翻訳先はローカル（MLX-LM / Qwen）または ChatGPT を選択できます。ローカルでは本文を端末内で処理し、ChatGPT では Sign in with ChatGPT の同意に基づき本文を OpenAI へ送信し、ChatGPT の利用枠を使います。
 
