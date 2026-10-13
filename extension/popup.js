@@ -96,11 +96,13 @@ const STATUS_MESSAGES = Object.freeze({
   health_http_error: "翻訳サーバが正常な応答を返しませんでした",
   health_invalid_response: "翻訳サーバの応答を確認できませんでした",
   chatgpt_not_connected: "ChatGPT に接続し、利用枠の使用を許可してください",
-  chatgpt_unavailable: "ChatGPT 用の補助プログラムを起動してください",
+  chatgpt_unavailable: "ChatGPT 用の補助プログラムを起動できません。自動起動の登録とポート8766を確認してください",
 });
 
 export async function requestCompanion(path, method = "GET", fetchImpl = globalThis.fetch) {
   if (!["/status", "/auth/start", "/auth/logout"].includes(path)) throw new Error("invalid_input");
+  const started = await chrome.runtime.sendMessage({ type: "startChatGPTHelper" });
+  if (started?.ok !== true) throw new Error("chatgpt_unavailable");
   const response = await fetchImpl(`${COMPANION_URL}${path}`, {
     method, headers: COMPANION_HEADERS, signal: AbortSignal.timeout(15_000),
   });
@@ -179,7 +181,7 @@ export function mountPopup({
       if (provider === "chatgpt") {
         try { await refreshConnection(); }
         catch (value) { if (accountStatus) accountStatus.textContent = value.message === "chatgpt_not_connected"
-          ? "ChatGPT に再接続してください" : "補助プログラムを起動してください"; }
+          ? "ChatGPT に再接続してください" : "自動起動の登録とポート8766を確認してください"; }
       }
     } catch {
       enabledInput.checked = false;

@@ -547,3 +547,24 @@ settings、bridge、queue、cache の既存境界を再利用する。
 補助の切断は実行中の fetch を abort する。
 新しい汎用 provider framework や cache 層は作らない。
 完了記録は `docs/plans/active/2026-10-12-chatgpt-translation.md` に保持する。
+
+## 18. ChatGPT 補助の自動起動（2026-10-13）
+
+判断は [ADR-010](../adr/010-native-messaging-startup.md) を正本とする。
+worker の `chatgpt-native.js` が固定 Native Port、起動完了待ちと操作時の再接続を所有する。
+popup の ChatGPT HTTP 操作と worker の翻訳要求は起動完了後に既存経路を使う。
+`chatgpt-native-host.mjs` は caller origin を検証し、共有 `startChatGPTServer` を起動する。
+起動完了のみを長さ付き UTF-8 JSON で stdout へ通知する。診断は固定文で stderr へ出す。
+stdin EOF と signal で共有停止処理を使い、子プロセスや新しい翻訳経路を追加しない。
+`install-native-host.mjs` は macOS Chrome のユーザ登録へ host manifest と起動 script を保存する。
+Node と host の絶対パスを shell quote し、拡張 ID を `allowed_origins` に限定する。
+Native 接続は OFF と provider 切替でも維持する。起動だけでは推論を依頼しない。
+
+検証: `npm --prefix extension test` 101件成功。Native readiness、並行起動共有、異常切断、timeout、popup の待機と sender 境界、EOF/signal 停止、入力拒否、起動途中の切断、bind 競合時の認証非初期化、macOS 登録と launcher を検証した。
+loopback listen は sandbox 内で EPERM となったため、制限外の同じコマンドで確認した。初回に失敗した既存の非同期 Port test も制限外で成功した。
+指定 ID `jclieefodnikgckkglmnbeeiaejcgflo` は Chrome 設定上 Default プロフィールだけにあり、ユーザが現在閉じている方と確認した。承認後に macOS の共有登録先へ登録し、許可 ID と launcher の実行権限を確認した。起動中の Chrome は操作せず、既存の8766 listener は停止していない。
+
+2026-10-13、ユーザが手動起動の補助を停止し、対象プロフィールの起動と拡張再読み込み後に翻訳動作を確認した。エージェントは `lsof` で新しい `node` プロセス（PID 2240）の `127.0.0.1:8766` listener を確認し、ユーザも Native host のプロセスを確認した。
+ユーザは実機動作確認の完了を報告し、開発完了を指定した。この報告に基づき本変更の実 Chrome 受け入れを合格とし、開発を完了する。
+エージェント自身の Chrome 操作は行っていない。無効化・Chrome 完全終了・再認証の個別試験内訳は未報告であり、それぞれの試験を実施済みとは記録しない。
+完了記録の更新は文書だけで、成功済みの自動テストは再実行していない。

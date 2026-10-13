@@ -9,6 +9,7 @@ import {
 import { TranslationQueue, sha256Hex } from "./translation-queue.js";
 import { BridgeRegistry } from "./bridge-registry.js";
 import { readProvider } from "./translation-provider.js";
+import { createNativeHelper } from "./chatgpt-native.js";
 
 export const REQUEST_PORT_NAME = "discord-translate-request";
 
@@ -84,11 +85,23 @@ export function registerChromeListeners(
   receivedCache = createReceivedTranslationCache(chromeApi?.storage?.local, { hashImpl: sha256Hex }),
 ) {
   if (!chromeApi?.runtime?.onConnect?.addListener) return false;
+  const ensureStarted = createNativeHelper(chromeApi.runtime);
+  const startHelper = () => {
+    void ensureStarted().then((state) => {
+      if (!state.ok) console.warn("chatgpt_native_unavailable");
+    });
+  };
+  chromeApi.runtime.onStartup?.addListener(startHelper);
+  startHelper();
 
   chromeApi.runtime.onConnect.addListener((port) => {
     if (port.name === REQUEST_PORT_NAME) {
       connectRequestPort(port, chromeApi.runtime.id, translator, receivedCache,
-        () => readProvider(chromeApi.storage.local));
+        async () => {
+          const provider = await readProvider(chromeApi.storage.local);
+          if (provider === "chatgpt" && !(await ensureStarted()).ok) throw new TranslationError("network_error");
+          return provider;
+        });
       return;
     }
     bridgeRegistry.connect(
@@ -99,6 +112,14 @@ export function registerChromeListeners(
   });
 
   chromeApi.runtime.onMessage.addListener((message, sender, respond) => {
+    if (message?.type === "startChatGPTHelper") {
+      if (sender.id !== chromeApi.runtime.id || sender.url !== chromeApi.runtime.getURL("popup.html") || sender.tab) {
+        respond({ ok: false });
+        return false;
+      }
+      void ensureStarted().then(respond);
+      return true;
+    }
     if (message?.type !== "lookupTranslation") return false;
     if (!validateSender(sender, chromeApi.runtime.id)) {
       respond({ status: "miss", error: "invalid_sender" });

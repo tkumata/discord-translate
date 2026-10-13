@@ -96,17 +96,27 @@ curl --fail http://127.0.0.1:8080/health
 ## ChatGPT 翻訳のセットアップ
 
 1. 上記「Chrome 拡張機能を読み込む」の手順で `extension/` を読み込み、拡張機能 ID を確認します。更新後は拡張機能と Discord タブを再読み込みしてください。
-2. Node.js 22 以降で、次の補助プログラムをリポジトリのルートから起動します。追加の npm パッケージは不要です。
+2. macOS と Node.js 22 以降で、Native Messaging を一度登録します。リポジトリのルートから次を実行してください。追加の npm パッケージは不要です。
 
    ```bash
-   CORS_ORIGIN="chrome-extension://<拡張機能ID>" node scripts/chatgpt-server.mjs
+   node scripts/install-native-host.mjs <拡張機能ID>
    ```
 
-3. ポップアップの「翻訳先」で「ChatGPT」を選び、`Continue with ChatGPT` を押します。
+3. 手動で起動していた ChatGPT 補助プログラムがあれば `Ctrl-C` で停止し、`chrome://extensions` で拡張機能を再読み込みします。ポップアップの「翻訳先」で「ChatGPT」を選び、`Continue with ChatGPT` を押します。
 4. 開いた OpenAI の認証画面でログインし、ChatGPT の利用枠の使用を許可します。
 5. 認証完了後、ポップアップを開き直し、接続済みのアカウントを確認して「有効」を ON にします。
 
-補助プログラムは `127.0.0.1:8766` だけで待ち受けます。使用中はターミナルを開いたままにし、終了は `Ctrl-C` です。認証情報は端末に保存され、次回起動時も利用できます。「切断」は翻訳を OFF にして端末内のトークンを削除し、OpenAI での失効を試みます。失効を確認できなかった場合は、表示された案内に従って ChatGPT の設定でも接続を解除してください。
+登録後は拡張機能の読み込みと Chrome のプロファイル起動時に補助プログラムが自動起動します。翻訳の ON / OFF や翻訳先に関係なく起動し、ターミナルを開いておく必要はありません。待ち受けは `127.0.0.1:8766` だけです。Native 接続が終了すると補助も停止します。Chrome を完全終了するか、拡張機能を無効化すると接続が終了します。Chrome ウィンドウを閉じただけでは終了しない場合があります。
+
+起動に失敗した場合は無限に再起動せず、ポップアップで ChatGPT の操作をするか、翻訳を依頼したときに再試行します。手動起動との併用や複数 Chrome プロファイルでの同時使用はできません。二重起動は認証情報を読み書きする前に拒否します。
+
+登録は `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` に本拡張専用の JSON と起動用 shell script を保存し、指定の拡張機能 ID だけを許可します。Node とリポジトリの絶対パスを使うため、Node の移動・削除やリポジトリの移動、拡張機能 ID の変更後は同じ登録コマンドを再実行してください。自動起動を解除するには、このディレクトリの `com.discord_translate.chatgpt.json` と `com.discord_translate.chatgpt.sh` を削除します。
+
+登録先は同じ Chrome の全プロフィールで共有されます。許可はプロフィール名ではなく拡張機能 ID で制限します。同じ ID の拡張を複数プロフィールに読み込んだ場合はどちらも起動を試み、固定ポートで競合します。
+
+2026-10-13、ユーザが手動補助の停止後に対象プロフィールと拡張を読み込み、翻訳動作と Native host のプロセスを実機で確認しました。自動テスト101件とユーザの実機確認を根拠に、本変更の受け入れは合格し、開発を完了しています。
+
+認証情報は端末に保存され、次回起動時も利用できます。「切断」は翻訳を OFF にして端末内のトークンを削除し、OpenAI での失効を試みます。失効を確認できなかった場合は、表示された案内に従って ChatGPT の設定でも接続を解除してください。
 
 API key は不要です。[ChatGPT の利用量設定](https://chatgpt.com/settings/usage)で利用枠を確認できます。利用可能なモデル一覧から最初の表示対象を使います。ChatGPT の会話画面、履歴、メモリとは連携しません。認証と推論の方式は [公式の Sign in with ChatGPT 文書](https://developers.openai.com/siwc/quickstart)に従います。
 
@@ -188,6 +198,7 @@ npm --prefix extension test
 | `extension/tests/` | 拡張機能の自動テスト |
 | `scripts/start-server.sh` | ローカル推論サーバの起動 |
 | `scripts/chatgpt-server.mjs` / `chatgpt-auth.mjs` | ChatGPT 翻訳用の補助プログラムと認証 |
+| `scripts/chatgpt-native-host.mjs` / `install-native-host.mjs` | Native Messaging による起動・停止と macOS 登録 |
 | `scripts/tests/` | 認証・Responses 変換・loopback HTTP の自動テスト |
 | `scripts/verify.py` | API 検証とセルフチェック |
 | `requirements.txt` | Python の依存関係 |
@@ -211,10 +222,10 @@ npm --prefix extension test
 | `mlx_lm.server is missing` で起動できない | `.venv` の作成と `requirements.txt` のインストールを行ってください。 |
 | モデルを読み込めない | 初回取得が完了しているか、取得時と起動時の `MODEL` が同じか確認してください。 |
 | ポップアップで有効化できない | サーバの起動、ポート 8080、拡張機能 ID と `CORS_ORIGIN` の一致、Chrome のローカルネットワーク許可を確認してください。 |
-| ChatGPT 用の補助プログラムに接続できない | Node.js 22 以降、ポート 8766、拡張機能 ID と `CORS_ORIGIN` の一致、Chrome のローカルネットワーク許可を確認してください。 |
+| ChatGPT 用の補助プログラムに接続できない | Native Messaging の登録を再実行し、拡張機能を再読み込みしてください。Node.js 22 以降、ポート 8766 の競合、登録した拡張機能 ID、Chrome のローカルネットワーク許可を確認してください。 |
 | `chatgpt_auth_required` | ポップアップから ChatGPT に再接続し、利用枠の使用を許可してください。 |
 | `chatgpt_usage_limit` | ポップアップの「ChatGPT の利用量を管理」で利用枠を確認し、利用可能になってから再試行してください。 |
-| 認証後の翻訳が `http_error` になる | 2026-10-12に実 API の Content-Type 欠落と最終 output 空配列への対応を追加しました。更新後は補助プログラムを `Ctrl-C` で停止し、同じ起動コマンドで再起動してください。認証情報は維持されます。 |
+| 認証後の翻訳が `http_error` になる | 2026-10-12に実 API の Content-Type 欠落と最終 output 空配列への対応を追加しました。更新後は拡張機能を再読み込みし、補助を再起動してください。認証情報は維持されます。 |
 | 翻訳ボタンが表示されない | 拡張機能と Discord タブを再読み込みし、ポップアップで OFF → ON を試してください。 |
 | 翻訳が失敗する | サーバの接続と API 検証結果を確認し、復旧後に「再試行」を押してください。長文の場合は入力を短くして確認してください。 |
 

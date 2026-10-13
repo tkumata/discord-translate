@@ -1,5 +1,6 @@
 import { registerChromeListeners, REQUEST_PORT_NAME } from "../service-worker.js";
 import { TranslationQueue } from "../translation-queue.js";
+import { fakePort } from "./worker-test-fixture.js";
 
 export async function waitFor(predicate) {
   const deadline = Date.now() + 5_000;
@@ -35,6 +36,11 @@ export function workerFixture(storage, { cache, requestImpl } = {}) {
     id: "extension-id", getURL: (path) => `chrome-extension://extension-id/${path}`,
     onConnect: { addListener(listener) { connect = listener; } },
     onMessage: { addListener(listener) { lookup = listener; } },
+    connectNative() {
+      const port = fakePort();
+      queueMicrotask(() => port.receive({ type: "ready" }));
+      return port;
+    },
   };
   const sender = { id: runtime.id, frameId: 0, url: "https://discord.com/channels/1/2", tab: { id: 1 } };
   const queue = new TranslationQueue({ requestImpl: async (...args) => {

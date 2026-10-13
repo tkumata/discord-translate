@@ -16,5 +16,6 @@
 | [ADR-008](008-persist-received-translations.md) | Accepted, implemented; Chrome verified by user | 2026-10-05 | 受信完成訳だけを端末内に5日間保存し、表示メッセージに一致する訳文を復元する。 |
 
 | [ADR-009](009-chatgpt-plan-translation.md) | Accepted, implementation in progress | 2026-10-12 | local / chatgpt 選択と認証・翻訳専用のloopback補助を追加する。 |
+| [ADR-010](010-native-messaging-startup.md) | Accepted, implemented; Chrome verified by user | 2026-10-13 | Native Messaging で ChatGPT 補助を拡張起動に連動させる。 |
 
 Qwen3.5採用、queue 2、FastAPI/Flask、launchdの詳細は未決定であり、現時点ではADRを作成しない。

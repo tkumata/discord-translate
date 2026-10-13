@@ -200,27 +200,34 @@ export function createChatGPTServer({ origin, auth, fetchImpl = globalThis.fetch
   return server;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  let server;
+export async function startChatGPTServer(origin, createAuth = createChatGPTAuth) {
+  let ready;
+  const auth = new Promise((resolve) => { ready = resolve; });
+  const server = createChatGPTServer({ origin, auth });
   try {
-    let ready;
-    const auth = new Promise((resolve) => { ready = resolve; });
-    server = createChatGPTServer({ origin: process.env.CORS_ORIGIN, auth });
     await new Promise((resolve, reject) => { server.once("error", reject); server.listen(8766, "127.0.0.1", resolve); });
     // Bind before touching credentials so a second process cannot race refresh/storage.
-    const runtime = await createChatGPTAuth();
+    const runtime = await createAuth();
     ready(runtime);
-    console.log("ChatGPT translation helper: 127.0.0.1:8766");
-    const stop = () => {
+    return () => {
       for (const controller of runtime.activeRequests) controller.abort();
       server.close();
       server.closeAllConnections();
     };
+  } catch (value) {
+    server.close();
+    server.closeAllConnections();
+    throw value;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    const stop = await startChatGPTServer(process.env.CORS_ORIGIN);
+    console.log("ChatGPT translation helper: 127.0.0.1:8766");
     process.once("SIGINT", stop);
     process.once("SIGTERM", stop);
   } catch {
-    server?.close();
-    server?.closeAllConnections();
     console.error("chatgpt_helper_start_failed: CORS_ORIGIN、ポート8766、認証ファイルを確認してください。");
     process.exitCode = 1;
   }
