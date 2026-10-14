@@ -177,7 +177,7 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 
 ### 7.4 OS 境界
 
-現行はforeground processである。launchd追加時も`start-server.sh`を唯一のserver起動入口とし、loopback/offline引数をplistへ重複させない。
+ローカルの起動入口は `start-server.sh` だけとし、loopback/offline 引数を Native host へ重複させない。拡張からの自動起動・停止は第20節と ADR-012 に従う。launchd は未実装である。
 
 ## 8. データと永続化
 
@@ -550,6 +550,8 @@ settings、bridge、queue、cache の既存境界を再利用する。
 
 ## 18. ChatGPT 補助の自動起動（2026-10-13）
 
+本節は採用時の履歴であり、2026-10-14以降の翻訳先別起動・停止は第20節と ADR-012 を優先する。
+
 判断は [ADR-010](../adr/010-native-messaging-startup.md) を正本とする。
 worker の `chatgpt-native.js` が固定 Native Port、起動完了待ちと操作時の再接続を所有する。
 popup の ChatGPT HTTP 操作と worker の翻訳要求は起動完了後に既存経路を使う。
@@ -599,3 +601,27 @@ loopback listen は sandbox 内で EPERM となったため、制限外の同じ
 2026-10-14、ユーザが動作確認の完了を報告した。
 今回の実 Chrome 受け入れを合格とし、開発を完了する。
 個別操作と異常系の実機試験内訳は未報告である。
+
+
+## 20. 選択先サーバの自動起動 (2026-10-14)
+
+判断は [ADR-012](../adr/012-provider-specific-server-startup.md)、外部動作は SPEC-PROVIDER-006 を正本とする。
+
+| 所有者 | 責務 |
+| --- | --- |
+| `service-worker.js` | 保存済み provider の読取り、変更世代の照合、popup sender と選択先の照合、翻訳前の ready 待機。 |
+| `chatgpt-native.js` | 一つの固定 Native Port、同時起動の共有、切替時の旧 Port 切断、起動 timeout。 |
+| `popup.js` | ready 後の既存ブラウザ health と LNA 確認、起動失敗の表示。有効化失敗時は OFF にする。 |
+| `chatgpt-native-host.mjs` | 共通の caller 検証、Native framing、受信拒否、EOF/signal とサーバ寿命。ChatGPT の起動入口も維持する。 |
+| `local-native-host.mjs` | 固定スクリプトの子プロセス、listener 所有と health の確認、子プロセスグループの停止。 |
+| `start-server.sh` | 従来どおりモデル照合・offline・telemetry 無効・loopback・CORS と公式 MLX 起動。 |
+| `install-native-host.mjs` | 両固定 host の manifest と絶対パス launcher を登録する。 |
+
+ローカル子プロセスの stdout/stderr は Native stdout に流さない。本文・訳文・認証情報を診断へ追加しない。
+`/health` が正常でも他のプロセスの応答なら ready にしない。自分の子プロセスのポート8080所有を macOS の `/usr/sbin/lsof` で確認する。
+起動確認中の lsof と HTTP も abort 可能にし、終了時にはモデル照合の子孫を含むグループへ SIGTERM、1秒後まで残れば SIGKILL を送る。
+この時間制限は Chrome が macOS Native host を終了待ち後に強制終了する前に子を停止するためである。
+起動だけでは本文を送らず、翻訳 HTTP と認証・queue・cache・保存の境界を変更しない。
+検証とユーザ実機確認の受け入れ記録は [実装計画](../plans/active/2026-10-14-provider-server-startup.md) を参照する。
+
+2026-10-14、ユーザの実機確認完了報告に基づき、本変更の実 Chrome 受け入れを合格とし、完了した。個別操作と異常系の実機試験内訳は未報告である。

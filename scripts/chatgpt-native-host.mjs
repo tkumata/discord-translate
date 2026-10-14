@@ -3,22 +3,29 @@ import { pathToFileURL } from "node:url";
 import { startChatGPTServer } from "./chatgpt-server.mjs";
 
 export function runNativeHost(caller, {
-  input = process.stdin, output = process.stdout, startServer = startChatGPTServer,
+  input = process.stdin, output = process.stdout, startServer = (origin) => startChatGPTServer(origin),
   signal,
 } = {}) {
   // Chrome supplies the allowed caller origin; no shell commands are accepted.
   if (!/^chrome-extension:\/\/[a-p]{32}\/$/.test(caller)) return Promise.reject(new Error("invalid_origin"));
   return new Promise((resolve, reject) => {
-    let stop;
+    const controller = new AbortController();
+    let starting;
     let closed = false;
     function close(error) {
       if (closed) return;
       closed = true;
-      stop?.();
+      controller.abort();
       input.destroy();
       signal?.removeEventListener("abort", abort);
-      if (error) reject(error);
-      else resolve();
+      void starting.then((stop) => stop()).then(() => {
+        if (error) reject(error);
+        else resolve();
+      }, (value) => {
+        if (error) reject(error);
+        else if (controller.signal.aborted && value?.name === "AbortError") resolve();
+        else reject(value);
+      });
     }
     const abort = () => close();
     input.once("end", () => close());
@@ -26,11 +33,13 @@ export function runNativeHost(caller, {
     input.once("data", () => close(new Error("invalid_native_input")));
     output.once("error", () => close(new Error("native_output_failed")));
     signal?.addEventListener("abort", abort, { once: true });
+    starting = Promise.resolve().then(() => startServer(caller.slice(0, -1), {
+      signal: controller.signal, onExit: () => close(new Error("server_exited")),
+    }));
     if (signal?.aborted) { close(); return; }
     input.resume();
-    void startServer(caller.slice(0, -1)).then((stopServer) => {
-      stop = stopServer;
-      if (closed) { stop(); return; }
+    void starting.then(() => {
+      if (closed) return;
       const body = Buffer.from(JSON.stringify({ type: "ready" }));
       const header = Buffer.alloc(4);
       if (endianness() === "LE") header.writeUInt32LE(body.length);

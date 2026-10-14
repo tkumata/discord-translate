@@ -86,12 +86,26 @@ export function registerChromeListeners(
 ) {
   if (!chromeApi?.runtime?.onConnect?.addListener) return false;
   const ensureStarted = createNativeHelper(chromeApi.runtime);
+  let providerRevision = 0;
+  const ensureSelected = async (expected) => {
+    const revision = providerRevision;
+    try {
+      const provider = await readProvider(chromeApi.storage.local);
+      if (revision !== providerRevision || (expected !== undefined && expected !== provider)) return { ok: false };
+      return await ensureStarted(provider);
+    } catch { return { ok: false }; }
+  };
   const startHelper = () => {
-    void ensureStarted().then((state) => {
-      if (!state.ok) console.warn("chatgpt_native_unavailable");
+    void ensureSelected().then((state) => {
+      if (!state.ok) console.warn("translation_server_unavailable");
     });
   };
   chromeApi.runtime.onStartup?.addListener(startHelper);
+  chromeApi.storage.onChanged?.addListener((changes, area) => {
+    if (area !== "local" || !changes.provider) return;
+    providerRevision++;
+    startHelper();
+  });
   startHelper();
 
   chromeApi.runtime.onConnect.addListener((port) => {
@@ -99,7 +113,7 @@ export function registerChromeListeners(
       connectRequestPort(port, chromeApi.runtime.id, translator, receivedCache,
         async () => {
           const provider = await readProvider(chromeApi.storage.local);
-          if (provider === "chatgpt" && !(await ensureStarted()).ok) throw new TranslationError("network_error");
+          if (!(await ensureSelected(provider)).ok) throw new TranslationError("network_error");
           return provider;
         });
       return;
@@ -112,12 +126,16 @@ export function registerChromeListeners(
   });
 
   chromeApi.runtime.onMessage.addListener((message, sender, respond) => {
-    if (message?.type === "startChatGPTHelper") {
+    if (message?.type === "startTranslationServer") {
       if (sender.id !== chromeApi.runtime.id || sender.url !== chromeApi.runtime.getURL("popup.html") || sender.tab) {
         respond({ ok: false });
         return false;
       }
-      void ensureStarted().then(respond);
+      if (message.provider !== "local" && message.provider !== "chatgpt") {
+        respond({ ok: false });
+        return false;
+      }
+      void ensureSelected(message.provider).then(respond);
       return true;
     }
     if (message?.type !== "lookupTranslation") return false;

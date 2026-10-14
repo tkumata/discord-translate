@@ -81,7 +81,21 @@ python3.14 -I scripts/setup_local.py --python-source 'Homebrew python@3.14'
 2. 「パッケージ化されていない拡張機能を読み込む」を選び、このリポジトリの `extension/` ディレクトリを指定します。
 3. 表示された拡張機能 ID をコピーします。ID は `a`〜`p` の 32 文字です。
 
-### 4. 翻訳サーバを起動する
+### 4. 翻訳サーバの自動起動を登録する
+
+サポート中の Node.js LTS（基準は24）を準備し、取得元と `command -v node`、`node --version` を確認して、一度登録します。追加 npm パッケージは不要です。
+
+```bash
+node scripts/install-native-host.mjs <拡張機能ID>
+```
+
+手動起動中のサーバがあればそのターミナルで停止し、拡張機能を再読み込みしてください。保存済みの翻訳先がローカルなら `scripts/start-server.sh`、ChatGPT なら補助サーバを自動起動します。翻訳先切替時は自動起動した旧サーバを停止し、選択先を起動します。OFF でも選択先のサーバは維持します。
+
+2026-10-14、ユーザの実機確認完了報告に基づき、選択先別の自動起動変更の実 Chrome 受け入れを合格とし、開発を完了しました。個別操作と異常系の実機試験内訳は未報告です。詳細は [実装・検証記録](docs/plans/active/2026-10-14-provider-server-startup.md) を参照してください。
+
+ローカルでは既存のモデル検証を実行し、通常起動で依存導入やモデル取得は行いません。既定の固定モデル、ポート8080、登録した拡張 ID の CORS を使います。起動には最大120秒の待機時間があります。有効化操作は起動完了後にブラウザからの接続を確認します。
+
+手動で起動・検証する場合は、拡張機能を無効化して自動起動したサーバの停止を待ち、次の手順を使えます。手動起動との併用は固定ポートで競合するため、既存のサーバを自動停止・引継ぎすることはありません。
 
 次の `<拡張機能ID>` を、Chrome に表示された実際の ID に置き換えて実行します。
 
@@ -119,11 +133,11 @@ curl --fail http://127.0.0.1:8080/health
 4. 開いた OpenAI の認証画面でログインし、ChatGPT の利用枠の使用を許可します。
 5. 認証完了後、ポップアップを開き直し、接続済みのアカウントを確認して「有効」を ON にします。
 
-登録後は拡張機能の読み込みと Chrome のプロファイル起動時に補助プログラムが自動起動します。翻訳の ON / OFF や翻訳先に関係なく起動し、ターミナルを開いておく必要はありません。待ち受けは `127.0.0.1:8766` だけです。Native 接続が終了すると補助も停止します。Chrome を完全終了するか、拡張機能を無効化すると接続が終了します。Chrome ウィンドウを閉じただけでは終了しない場合があります。
+登録後は拡張機能の読み込みと Chrome のプロファイル起動時に、保存済みの翻訳先のサーバが自動起動します。ChatGPT 選択時の待ち受けは `127.0.0.1:8766` だけです。ローカル選択時は `scripts/start-server.sh` を起動します。翻訳先切替では旧サーバを停止して選択先を起動し、ON / OFF やアカウント切断では選択先のサーバを維持します。ターミナルを開いておく必要はありません。Native 接続が終了すると自動起動したサーバも停止します。Chrome を完全終了するか、拡張機能を無効化すると接続が終了します。Chrome ウィンドウを閉じただけでは終了しない場合があります。
 
-起動に失敗した場合は無限に再起動せず、ポップアップで ChatGPT の操作をするか、翻訳を依頼したときに再試行します。手動起動との併用や複数 Chrome プロファイルでの同時使用はできません。二重起動は認証情報を読み書きする前に拒否します。
+起動に失敗した場合は無限に再起動せず、ポップアップで有効化・ChatGPT の操作をするか、翻訳を依頼したときに再試行します。手動起動との併用や複数 Chrome プロファイルでの同時使用はできません。ChatGPT の二重起動は認証情報を読み書きする前に拒否します。ローカルでは他のプロセスの正常な health 応答を、自分の起動成功として扱いません。
 
-登録は `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` に本拡張専用の JSON と起動用 shell script を保存し、指定の拡張機能 ID だけを許可します。Node とリポジトリの絶対パスを使うため、Node の移動・削除やリポジトリの移動、拡張機能 ID の変更後は同じ登録コマンドを再実行してください。自動起動を解除するには、このディレクトリの `com.discord_translate.chatgpt.json` と `com.discord_translate.chatgpt.sh` を削除します。
+登録は `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` に両翻訳先の JSON と起動用 shell script を保存し、指定の拡張機能 ID だけを許可します。以前 ChatGPT 用だけを登録した環境でも同じコマンドを再実行してください。Node とリポジトリの絶対パスを使うため、Node の移動・削除やリポジトリの移動、拡張機能 ID の変更後も再登録します。自動起動を解除するには、このディレクトリの `com.discord_translate.chatgpt.json`、`com.discord_translate.chatgpt.sh`、`com.discord_translate.local.json`、`com.discord_translate.local.sh` を削除します。
 
 登録先は同じ Chrome の全プロフィールで共有されます。許可はプロフィール名ではなく拡張機能 ID で制限します。同じ ID の拡張を複数プロフィールに読み込んだ場合はどちらも起動を試み、固定ポートで競合します。
 
@@ -212,7 +226,7 @@ npm --prefix extension test
 | `extension/tests/` | 拡張機能の自動テスト |
 | `scripts/start-server.sh` | ローカル推論サーバの起動 |
 | `scripts/chatgpt-server.mjs` / `chatgpt-auth.mjs` | ChatGPT 翻訳用の補助プログラムと認証 |
-| `scripts/chatgpt-native-host.mjs` / `install-native-host.mjs` | Native Messaging による起動・停止と macOS 登録 |
+| `scripts/chatgpt-native-host.mjs` / `local-native-host.mjs` / `install-native-host.mjs` | 選択先の Native Messaging による起動・停止と macOS 登録 |
 | `scripts/tests/` | 認証・Responses 変換・loopback HTTP の自動テスト |
 | `scripts/verify.py` | API 検証とセルフチェック |
 | `requirements.txt` | Python の依存関係 |
@@ -234,7 +248,7 @@ npm --prefix extension test
 - Discord の画面構造の変更により、翻訳ボタンが表示されなくなる場合があります。
 - 下書き翻訳は通常の投稿入力欄のテキストを対象とします。メンションなどの非テキスト要素を含む下書きは翻訳しません。投稿済みメッセージの編集欄や検索欄は対象外です。
 - Discordが入力欄の更新を受理しない場合は「下書きを更新できませんでした」と表示します。
-- サーバの自動起動は提供していません。利用時に起動スクリプトを実行してください。
+- 自動起動は macOS Chrome の Native Messaging 登録後に利用できます。ローカルの依存とモデルは事前に準備してください。macOS ログイン時の launchd 起動は提供していません。
 
 ## トラブルシューティング
 
@@ -244,6 +258,7 @@ npm --prefix extension test
 | `model_verification_failed` で起動できない | `scripts/model_assets.py verify` で確認し、台帳と取得物を照合してください。改変済みの配置を自動上書きせず、退避してから取得します。 |
 | `venv_already_exists_use_a_new_directory` | 既存サーバを停止し、既存 venv を退避するか `--venv` に未使用パスを指定してください。 |
 | ポップアップで有効化できない | サーバの起動、ポート 8080、拡張機能 ID と `CORS_ORIGIN` の一致、Chrome のローカルネットワーク許可を確認してください。 |
+| `local_unavailable` | Native Messaging を再登録し、固定依存と検証済みモデル、ポート8080の競合を確認してください。手動サーバとの併用はできません。 |
 | ChatGPT 用の補助プログラムに接続できない | Native Messaging の登録を再実行し、拡張機能を再読み込みしてください。サポート中の Node.js LTS、ポート 8766 の競合、登録した拡張機能 ID、Chrome のローカルネットワーク許可を確認してください。 |
 | `chatgpt_auth_required` | ポップアップから ChatGPT に再接続し、利用枠の使用を許可してください。 |
 | `chatgpt_usage_limit` | ポップアップの「ChatGPT の利用量を管理」で利用枠を確認し、利用可能になってから再試行してください。 |

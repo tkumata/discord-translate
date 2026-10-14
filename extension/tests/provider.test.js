@@ -160,7 +160,11 @@ test("popup changes provider while OFF, checks only that provider and opens only
     return { connected, account: "test@example.invalid", model: "model" };
   };
   mountPopup({ documentApi: { querySelector: (selector) => elements[selector.slice(1)] },
-    chromeApi: { storage: { local: storage }, tabs: { create: async (value) => tabs.push(value) } },
+    chromeApi: { storage: { local: storage }, tabs: { create: async (value) => tabs.push(value) },
+      runtime: { sendMessage: async (message) => {
+        assert.deepEqual(message, { type: "startTranslationServer", provider: "local" });
+        return { ok: true };
+      } } },
     companionRequest, healthCheck: async () => { healthy++; return { ok: true }; } });
   const idle = () => waitFor(() => !elements.enabled.disabled);
   await idle();

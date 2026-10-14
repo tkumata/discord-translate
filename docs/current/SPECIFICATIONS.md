@@ -731,6 +731,8 @@ bridge 用 SSE と `[DONE]` を確認した。本文・訳文・tokens は出力
 
 ### SPEC-PROVIDER-005 Native Messaging による自動起動（2026-10-13）
 
+2026-10-14の翻訳先別起動と停止条件は SPEC-PROVIDER-006 を優先する。以下の完了記録は2026-10-13の変更だけを対象とする。
+
 状態: 完了。ユーザが Native Messaging 方式を選択し、実装・Node 自動検証済み。2026-10-13のユーザ実機確認により本変更の受け入れは合格し、ユーザの指定により開発を完了した。
 SPEC-PROVIDER-004 の API permission 非追加条件に `nativeMessaging` の例外を設ける。
 macOS Chrome のユーザ用 host 登録を一度行い、登録した拡張 ID だけが起動できる。
@@ -829,3 +831,23 @@ package.json の ESM 設定は維持する。
 2026-10-14、ユーザが動作確認の完了を報告した。
 今回の実 Chrome 受け入れを合格とし、開発を完了する。
 個別操作と異常系の実機試験内訳は未報告である。
+
+
+## 18. 選択した翻訳先の自動起動 (2026-10-14)
+
+### SPEC-PROVIDER-006 起動先の選択と停止
+
+- MUST: 保存済み provider の固定 Native host だけを起動する。local は `com.discord_translate.local`、ChatGPT は既存の `com.discord_translate.chatgpt` とする。
+- MUST: 拡張 worker 読み込み・Chrome プロファイル起動・provider 変更に対応する。provider 変更で旧接続を閉じる。遅れた設定読取りは新しい選択を上書きしない。
+- MUST: local は固定モデルとポート8080、caller origin の CORS で `scripts/start-server.sh` を使う。モデル取得や依存導入を起動処理へ追加しない。
+- MUST: local の ready は120秒以内に、子プロセスの listener 所有と `/health` の厳密な正常応答を確認して通知する。Native 待機の上限は local 130秒、ChatGPT 15秒とする。
+- MUST: popup の起動要求は同じ拡張 ID・正確な popup URL・tab なし・保存済み provider 一致を条件とする。Native 経路の受信データは引き続き拒否する。
+- MUST: 有効化時のブラウザ health と両翻訳先への要求は ready を待つ。local 起動失敗は `local_unavailable` とし、有効化しない。Chrome の LNA 確認は維持する。
+- MUST: OFF とアカウント切断では停止しない。切替・EOF・signal・拡張無効化・Chrome 完全終了では自分のサーバを停止する。local のモデル検証中もプロセスグループを停止する。
+- MUST: local は SIGTERM 後1秒で終了しなければ SIGKILL を送る。ready 後の子プロセス終了でも Native 接続を閉じる。
+- MUST: 競合サーバを引継ぎ・停止しない。失敗時は次の操作で再試行し、無限再起動や翻訳先の自動変更を行わない。
+
+macOS 標準 `/usr/sbin/lsof` で listener の所有を確認する。登録は既存 installer で両方を行い、既存利用者も再登録する。権限と依存は追加しない。
+実 Chrome と自動検証の結果は [実装計画](../plans/active/2026-10-14-provider-server-startup.md) に分けて記録する。
+
+2026-10-14、ユーザの実機確認完了報告に基づき、本変更の実 Chrome 受け入れを合格とし、完了した。個別操作と異常系の実機試験内訳は未報告である。

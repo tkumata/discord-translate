@@ -10,6 +10,7 @@ export const HEALTH_ERROR_CODES = Object.freeze([
   "health_invalid_response",
   "chatgpt_not_connected",
   "chatgpt_unavailable",
+  "local_unavailable",
 ]);
 
 function isStrictHealthyPayload(payload) {
@@ -97,12 +98,18 @@ const STATUS_MESSAGES = Object.freeze({
   health_invalid_response: "翻訳サーバの応答を確認できませんでした",
   chatgpt_not_connected: "ChatGPT に接続し、利用枠の使用を許可してください",
   chatgpt_unavailable: "ChatGPT 用の補助プログラムを起動できません。自動起動の登録とポート8766を確認してください",
+  local_unavailable: "ローカル翻訳サーバを起動できません。自動起動の登録、モデルの準備、ポート8080を確認してください",
 });
+
+export async function startTranslationServer(provider, runtime = globalThis.chrome.runtime) {
+  validateProvider(provider);
+  const started = await runtime.sendMessage({ type: "startTranslationServer", provider });
+  if (started?.ok !== true) throw new Error(provider === "local" ? "local_unavailable" : "chatgpt_unavailable");
+}
 
 export async function requestCompanion(path, method = "GET", fetchImpl = globalThis.fetch) {
   if (!["/status", "/auth/start", "/auth/logout"].includes(path)) throw new Error("invalid_input");
-  const started = await chrome.runtime.sendMessage({ type: "startChatGPTHelper" });
-  if (started?.ok !== true) throw new Error("chatgpt_unavailable");
+  await startTranslationServer("chatgpt");
   const response = await fetchImpl(`${COMPANION_URL}${path}`, {
     method, headers: COMPANION_HEADERS, signal: AbortSignal.timeout(15_000),
   });
@@ -199,7 +206,11 @@ export function mountPopup({
       showStatus("接続確認中…");
       try {
         const state = await enableTranslation({
-          healthCheck: provider === "local" ? healthCheck : () => checkChatGPT(companionRequest), setEnabled,
+          healthCheck: provider === "local" ? async () => {
+            try { await startTranslationServer("local", chromeApi.runtime); }
+            catch { return { ok: false, error: "local_unavailable" }; }
+            return healthCheck();
+          } : () => checkChatGPT(companionRequest), setEnabled,
         });
         enabledInput.checked = state.enabled;
         showStatus(state.enabled ? "有効" : STATUS_MESSAGES[state.error], state.error);

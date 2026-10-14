@@ -66,9 +66,9 @@ test("native disconnect during startup stops a late server without emitting read
   output.on("data", () => { frames++; });
   const done = runNativeHost(caller, { input, output, startServer: () => starting });
   input.end();
-  await done;
-  resolve(() => { stopped++; });
   await new Promise((done) => setImmediate(done));
+  resolve(() => { stopped++; });
+  await done;
   assert.equal(stopped, 1);
   assert.equal(frames, 0);
 });
@@ -105,19 +105,21 @@ test("macOS installer registers only the selected extension and a working absolu
   const installer = fileURLToPath(new URL("../install-native-host.mjs", import.meta.url));
   const env = { ...process.env, HOME: home };
   await assert.rejects(exec(process.execPath, [installer, "invalid"], { env }), { code: 1 });
-  const name = "com.discord_translate.chatgpt";
   const directory = join(home, "Library", "Application Support", "Google", "Chrome", "NativeMessagingHosts");
   await exec(process.execPath, [installer, caller.split("/")[2]], { env });
-  const manifest = JSON.parse(await readFile(join(directory, `${name}.json`), "utf8"));
-  assert.deepEqual(manifest.allowed_origins, [caller]);
-  assert.equal(manifest.name, name);
-  assert.equal(manifest.type, "stdio");
-  assert.equal(manifest.path, join(directory, `${name}.sh`));
-  assert.equal((await stat(manifest.path)).mode & 0o777, 0o700);
-  await assert.rejects(exec(manifest.path, ["https://discord.com/"], { env }), (value) => {
-    assert.equal(value.code, 1);
-    assert.equal(value.stdout, "");
-    assert.match(value.stderr, /chatgpt_native_start_failed/);
-    return true;
-  });
+  for (const provider of ["chatgpt", "local"]) {
+    const name = `com.discord_translate.${provider}`;
+    const manifest = JSON.parse(await readFile(join(directory, `${name}.json`), "utf8"));
+    assert.deepEqual(manifest.allowed_origins, [caller]);
+    assert.equal(manifest.name, name);
+    assert.equal(manifest.type, "stdio");
+    assert.equal(manifest.path, join(directory, `${name}.sh`));
+    assert.equal((await stat(manifest.path)).mode & 0o777, 0o700);
+    await assert.rejects(exec(manifest.path, ["https://discord.com/"], { env }), (value) => {
+      assert.equal(value.code, 1);
+      assert.equal(value.stdout, "");
+      assert.match(value.stderr, new RegExp(`${provider}_native_start_failed`));
+      return true;
+    });
+  }
 });
