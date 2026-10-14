@@ -18,11 +18,11 @@ Discord Web の受信メッセージを日本語へ、投稿前の日本語の�
 
 ## 動作環境
 
-ローカル翻訳には Apple Silicon Mac、native arm64 の Python、Google Chrome が必要です。モデルの初回取得にはインターネット接続と、モデルを保存するディスク容量が必要です。
+ローカル翻訳の固定環境は macOS 26 以降の Apple Silicon Mac と native arm64 の CPython 3.14 です。Chrome はサポート中の Stable を使います。モデルの初回取得にはインターネット接続と、モデルを保存するディスク容量が必要です。
 
-ChatGPT 翻訳には Chrome、Node.js 22 以降、インターネット接続、Sign in with ChatGPT を利用できるアカウントが必要です。MLX とモデルの取得は不要です。2026-10-12にユーザが認証成功を報告し、修正済み補助プログラムと実 API による固定文の日訳・英訳を確認しました。同日のユーザ実機動作確認により、今回の変更の実 Chrome 受け入れは合格しました。
+ChatGPT 翻訳には Chrome、サポート中の Node.js LTS、インターネット接続、Sign in with ChatGPT を利用できるアカウントが必要です。基準の Node.js は 24 LTS です。MLX とモデルの取得は不要です。2026-10-12にユーザが認証成功を報告し、修正済み補助プログラムと実 API による固定文の日訳・英訳を確認しました。同日のユーザ実機動作確認により、当時の変更の実 Chrome 受け入れは合格しました。
 
-動作確認時の環境は次のとおりです。最低要件を示すものではありません。
+過去のユーザ実機確認時の環境は次のとおりです。最低要件を示すものではありません。2026-10-14 の固定環境による検証結果は実装計画に記録しています。
 
 | 項目 | 動作確認環境 |
 | --- | --- |
@@ -40,29 +40,40 @@ ChatGPT 翻訳には Chrome、Node.js 22 以降、インターネット接続、
 
 以下のコマンドはリポジトリのルートで実行します。
 
-### 1. Python 環境を作成する
+### 1. 固定した Python 依存を導入する
+
+信頼した配布元の Python 3.14 を使います。実行ファイルの取得元を確認し、`--python-source` に記録してください。Homebrew で導入した場合の例を示します。
 
 ```bash
-python3 -m venv .venv
-./.venv/bin/python -m pip install -r requirements.txt
-./.venv/bin/python -m pip check
+git rev-parse HEAD
+git status --short
+python3.14 -I scripts/setup_local.py --python-source 'Homebrew python@3.14'
 ```
 
-`requirements.txt` では `mlx-lm==0.31.3` を指定しています。システムの Python 環境にはインストールせず、このプロジェクトの `.venv` を使います。
+`requirements.txt` は全 34 依存の版と対象 wheel の SHA-256 を固定しています。導入処理は PyPI だけを使い、pip の環境変数と設定ファイルによる配布元の上書きを遮断します。hash 不一致、未固定依存、対応 wheel 不足はエラーになります。source build、追加 index、自動的な代替取得は行いません。
+
+導入処理は Python に同梱された `ensurepip` で pip を初期化します。取得元、Python と pip の版、Git commit、未コミット変更の有無、依存台帳の hash を `.venv/supply-chain-install.json` に記録します。記録は署名による由来の証明ではありません。ソースと台帳は信頼した commit と照合してください。
+
+既存の `.venv` は上書きしません。移行時は既存のローカルサーバを停止し、`.venv` を未使用の `.venv-before-supply-chain` 等へ退避してから、同じコマンドを実行してください。移動した venv は移動先で使わず、復旧時に元の `.venv` の位置へ戻します。失敗した新規 venv も再利用しません。別の新規ディレクトリで検証する場合は `--venv <新規パス>` を指定します。
 
 ### 2. モデルを取得する
 
-初回だけ Hugging Face Hub からモデルをダウンロードします。
+初回だけ Hugging Face Hub から、`models.lock.json` の commit に固定したモデルを取得します。
 
 ```bash
-HF_HUB_OFFLINE=0 HF_HUB_DISABLE_TELEMETRY=1 \
-  ./.venv/bin/mlx_lm.generate \
-  --model mlx-community/Qwen3.5-9B-MLX-4bit \
-  --prompt 'Translate into Japanese: The build passed.' \
-  --max-tokens 8
+./.venv/bin/python -I scripts/model_assets.py fetch
 ```
 
-通常起動ではキャッシュ済みモデルをオフラインで読み込みます。モデルの取得が終わっていない場合、サーバは起動できません。
+既存キャッシュを再利用する場合は、固定 snapshot のファイルをコピーしてから照合します。
+
+```bash
+./.venv/bin/python -I scripts/model_assets.py fetch --from-cache \
+  "$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3.5-9B-MLX-4bit/snapshots/938d8919941c6e7efd3c7150eff7fe9d12afa631"
+```
+
+取得処理は台帳の 11 ファイルだけを `models/` に保存します。全ファイルの検証後に配置を確定します。通常起動でも全ファイルの SHA-256 と設定を検証し、検証済みの絶対ローカルパスを公式サーバへ渡します。通常起動はモデル取得と依存導入を行いません。不足・改変・余分なファイル・モデル領域外への symlink は起動失敗になります。
+
+重みは safetensors に限定します。起動前の検証は `model_file`、`auto_map` と custom tokenizer 指定を拒否します。MLX CLI のフラグ省略は明示的な `trust_remote_code=False` ではないため、データと組込み実装の限定によってモデル由来のコード読込みを禁止します。標準入力は `/dev/null` とし、対話による許可も行いません。
 
 ### 3. Chrome 拡張機能を読み込む
 
@@ -83,6 +94,8 @@ export CORS_ORIGIN="chrome-extension://<拡張機能ID>"
 
 サーバは `127.0.0.1:8080` で待ち受けます。拡張機能の接続先もこのアドレスに固定されているため、拡張機能と使う場合は `PORT=8080` にしてください。CORS には上記の拡張機能 ID を指定し、`*` や `https://discord.com` は指定しません。
 
+`MODEL` は台帳に登録したモデルの選択だけに使います。任意の Hub 名やパスは拒否します。モデルファイルの起動前照合は、この環境の約 6 GB のモデルで約 2.2 秒でした。
+
 別のターミナルから接続を確認できます。
 
 ```bash
@@ -96,7 +109,7 @@ curl --fail http://127.0.0.1:8080/health
 ## ChatGPT 翻訳のセットアップ
 
 1. 上記「Chrome 拡張機能を読み込む」の手順で `extension/` を読み込み、拡張機能 ID を確認します。更新後は拡張機能と Discord タブを再読み込みしてください。
-2. macOS と Node.js 22 以降で、Native Messaging を一度登録します。リポジトリのルートから次を実行してください。追加の npm パッケージは不要です。
+2. macOS とサポート中の Node.js LTS で、Native Messaging を一度登録します。リポジトリと Node の取得元を確認し、`git rev-parse HEAD`、`git status --short`、`command -v node` と `node --version` を確認してください。登録は表示した Node とソースの絶対パスを実行対象にします。リポジトリのルートから次を実行してください。追加の npm パッケージは不要です。
 
    ```bash
    node scripts/install-native-host.mjs <拡張機能ID>
@@ -164,12 +177,13 @@ MLX サーバのログ設定は `CRITICAL` とし、通常のログに本文・�
 
 サーバには公式の `mlx_lm.server` を使い、起動スクリプトは Bash、API 検証スクリプトは Python 標準ライブラリで実装しています。拡張機能は Manifest V3 と JavaScript / HTML / CSS で構成され、ビルドは不要です。
 
-拡張機能と補助プログラムのテストには Node.js 22 以降、および npm が必要です。Node.js のテストは標準のテストランナーを使用し、追加の npm 依存関係はありません。
+拡張機能と補助プログラムのテストにはサポート中の Node.js LTS、および npm が必要です。基準環境は Node.js 24 LTS です。Node.js のテストは標準のテストランナーを使用し、追加の npm 依存関係はありません。`npm install` と `npx` は不要です。導入・モデル検証のテストは Python 標準の unittest を使います。
 
 サーバを起動せずに検証する場合:
 
 ```bash
 ./.venv/bin/python scripts/verify.py --self-check
+./.venv/bin/python -I -m unittest discover -s scripts/tests -p 'test_*.py'
 npm --prefix extension test
 ```
 
@@ -202,10 +216,17 @@ npm --prefix extension test
 | `scripts/tests/` | 認証・Responses 変換・loopback HTTP の自動テスト |
 | `scripts/verify.py` | API 検証とセルフチェック |
 | `requirements.txt` | Python の依存関係 |
+| `models.lock.json` | 許可モデルの commit、ファイル名、サイズと SHA-256 |
+| `scripts/setup_local.py` | 新規 venv への hash 検証付き依存導入と取得元の記録 |
+| `scripts/model_assets.py` | モデルの固定取得、既存キャッシュ移行、起動前の検証 |
 | `docs/current/` | 要件・仕様・設計 |
 | `docs/adr/` | 設計上の決定と理由 |
 
 ## 制約
+
+- サプライチェーン対策は完全な安全性を保証しません。初回採用時の悪意、配布元や OS の侵害、parser の欠陥は残存リスクです。
+- 公式 MLX サーバは基本的なセキュリティ検査だけを提供します。起動前の検証はサーバ API を変更しません。同一端末の別プロセスからの任意 HTTP 要求を排除する境界ではありません。
+- CSP は拡張機能のページと worker に適用します。同梱 script と固定 loopback 接続だけを許可します。Native host と Discord 本体には適用しません。
 
 - 翻訳品質はモデルと入力に依存します。Markdown、URL、コードなどの保持を指示していますが、完全な保持は保証しません。重要な内容は原文と照合してください。
 - 入力は 8,000 UTF-16 コード単位までです。ローカル出力は最大 1,024 トークンです。ChatGPT にはこのトークン設定を渡さず、共通の出力検証上限 64 Ki UTF-16 コード単位を適用します。途中で切れた応答は失敗とします。
@@ -219,10 +240,11 @@ npm --prefix extension test
 
 | 症状 | 確認すること |
 | --- | --- |
-| `mlx_lm.server is missing` で起動できない | `.venv` の作成と `requirements.txt` のインストールを行ってください。 |
-| モデルを読み込めない | 初回取得が完了しているか、取得時と起動時の `MODEL` が同じか確認してください。 |
+| `mlx_lm.server is missing` で起動できない | 新規 venv に対して `scripts/setup_local.py` を実行してください。 |
+| `model_verification_failed` で起動できない | `scripts/model_assets.py verify` で確認し、台帳と取得物を照合してください。改変済みの配置を自動上書きせず、退避してから取得します。 |
+| `venv_already_exists_use_a_new_directory` | 既存サーバを停止し、既存 venv を退避するか `--venv` に未使用パスを指定してください。 |
 | ポップアップで有効化できない | サーバの起動、ポート 8080、拡張機能 ID と `CORS_ORIGIN` の一致、Chrome のローカルネットワーク許可を確認してください。 |
-| ChatGPT 用の補助プログラムに接続できない | Native Messaging の登録を再実行し、拡張機能を再読み込みしてください。Node.js 22 以降、ポート 8766 の競合、登録した拡張機能 ID、Chrome のローカルネットワーク許可を確認してください。 |
+| ChatGPT 用の補助プログラムに接続できない | Native Messaging の登録を再実行し、拡張機能を再読み込みしてください。サポート中の Node.js LTS、ポート 8766 の競合、登録した拡張機能 ID、Chrome のローカルネットワーク許可を確認してください。 |
 | `chatgpt_auth_required` | ポップアップから ChatGPT に再接続し、利用枠の使用を許可してください。 |
 | `chatgpt_usage_limit` | ポップアップの「ChatGPT の利用量を管理」で利用枠を確認し、利用可能になってから再試行してください。 |
 | 認証後の翻訳が `http_error` になる | 2026-10-12に実 API の Content-Type 欠落と最終 output 空配列への対応を追加しました。更新後は拡張機能を再読み込みし、補助を再起動してください。認証情報は維持されます。 |
@@ -235,3 +257,21 @@ npm --prefix extension test
 - [仕様書](docs/current/SPECIFICATIONS.md)
 - [設計書](docs/current/DESIGN.md)
 - [設計上の決定（ADR）](docs/adr/README.md)
+
+## 依存関係とモデルの更新
+
+通常起動とは別に、管理者が次の順序で更新します。新しいモデルの採用は既存の実装計画の範囲に含めません。
+
+1. 信頼した Git commit、Python 配布元、Node.js 配布元を確認します。
+2. 配布者の公式情報で、EOL、非推奨指定、公開セキュリティ勧告を確認します。月次の確認も行います。
+3. Python は新規 venv で全依存を解決します。PyPI の正規プロジェクトと選択した wheel を確認し、SHA-256 を `requirements.txt` へ記録します。source distribution は採用しません。
+4. モデルは完全な commit ID と許可ファイルを確認します。LFS 資産の SHA-256 と通常ファイルの Git blob ID を固定元の情報と照合し、各ファイルの SHA-256 とサイズを `models.lock.json` へ記録します。
+5. バージョン、配布者、追加依存、対象ファイルとハッシュの差分をレビューします。取得直後のハッシュ生成だけでは、安全性の確認になりません。
+6. 新規 venv への正式導入、モデル検証、異常系テスト、両翻訳先の回帰検証を行います。自動検証と実 Chrome の確認は分けて記録します。
+7. 検証後に台帳を採用します。直前の信頼した commit、モデル資産、venv の復旧先を保持します。既知の危険がある旧版へ戻す操作は安全な復旧とは扱いません。
+
+2026-10-14 の採用確認では、34 依存の対象 wheel と PyPI の公表ハッシュが一致しました。対象版について PyPI と OSV の公開脆弱性情報に該当はありませんでした。公開情報に未掲載の問題がないことは保証しません。
+
+詳細は [ADR-011](docs/adr/011-verified-dependency-and-model-inputs.md) と [実装計画](docs/plans/active/2026-10-14-supply-chain-hardening.md) を参照してください。
+
+2026-10-14、ユーザの動作確認完了報告に基づき、今回の実 Chrome 受け入れを合格とし、開発を完了しました。個別操作と異常系の実機試験内訳は未報告です。

@@ -2,6 +2,9 @@
   "manifest_version": 3,
   "name": "Discord Translator",
   "version": "0.1.0",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src http://127.0.0.1:8080 http://127.0.0.1:8766;"
+  },
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"

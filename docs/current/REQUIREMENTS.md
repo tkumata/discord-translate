@@ -3,7 +3,7 @@
 2026-10-02に順次表示を承認・実装した。追加要求は第7節を参照する。自動・実モデル検証は成功、実ChromeもユーザーのTask 5実機確認により合格し、本変更は完了した。
 
 - Status: Current
-- Last reviewed: 2026-10-12
+- Last reviewed: 2026-10-14
 - Approved addition: 第8節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第10節は完了。実機受け入れはユーザの再確認で合格。
 - Product: Discord ローカル日本語翻訳
@@ -28,7 +28,7 @@
 | REQ-F-003 | 翻訳結果だけを返し、解説、原文の反復、thinking/reasoning を表示しないこと。 | 実装済み。固定ケースでは検証済み。 |
 | REQ-F-004 | URL、Markdown、ユーザー名、`@username`、`#channel`、コード、インラインコード、製品名、API名、ライブラリ名、識別子、絵文字を意味上必要な範囲で保持すること。 | 一部検証済み。実ID検証ではdaily/discord/code/japanese/prompt/serialが成功し、Markdown/URL caseの`**the patch**`不変条件が未合格。スラングと長い複数文の目視品質も未検証。 |
 | REQ-F-005 | 日本語入力でも異常な出力をせず、意味を変えないこと。 | 固定1ケースのみ検証済み。 |
-| REQ-F-006 | Qwen の MLX 4bit 量子化モデルを使い、モデルを環境変数 `MODEL` で変更できること。 | 実装済み。Qwen3-8B-4bit だけ実機検証済み。 |
+| REQ-F-006 | Qwen の MLX 4bit 量子化モデルを使い、環境変数 `MODEL` で台帳に登録したモデルを選択できること。 | 実装済み。現在の固定モデルと検証範囲は第12節。 |
 | REQ-F-007 | `./scripts/start-server.sh` で起動し、フォアグラウンドでは `Ctrl-C` で停止できること。 | 実装済み・実機検証済み。 |
 | REQ-F-008 | 既存の `/health` で HTTP サーバ状態を確認し、実 chat completion で model readiness を確認できること。 | 実装済み・実機検証済み。 |
 | REQ-F-009 | Chrome content scriptは利用者の`翻訳`または`再試行`押下時だけservice workerへ翻訳を依頼し、service workerがsender/input、固定payload、queue/cache、最終応答を所有すること。localhostへの翻訳HTTP送信だけは、同じDiscord tab内の検証済みExtension document bridgeへ委譲すること。popupはLNA許可取得用の`/health`確認だけを行える。 | 実装済み・Node test合格・実Chrome検証済み。 |
@@ -48,7 +48,7 @@
 | REQ-N-003 | CORS は実際の `chrome-extension://<EXTENSION_ID>` だけを許可し、`*` や Discord page origin を許可しないこと。 | 実IDのpreflight、`/health`、実Chrome bridge fetch、disallowed originを検証済み。 |
 | REQ-N-004 | 通常ログに request body、prompt、response、翻訳本文を保存しないこと。 | CRITICAL 設定と通常要求で本文非出力を確認済み。不正JSONを含むprivacy marker試験は未実施。 |
 | REQ-N-005 | 通常運用ではモデルを事前 cache し、`HF_HUB_OFFLINE=1` と telemetry 無効で起動すること。 | 実装済み・offline再起動確認済み。 |
-| REQ-N-006 | システム Python を汚さず、プロジェクトの `.venv` と最小依存で動作すること。 | 実装済み。`mlx-lm==0.31.3` を固定。 |
+| REQ-N-006 | システム Python を汚さず、プロジェクトの `.venv` と最小依存で動作すること。 | 全34依存の版と wheel の SHA-256 を固定。第12節。 |
 | REQ-N-007 | 大量並列より安定性を優先し、サーバの prompt/decode concurrency と Extension queue を初期値1にすること。 | サーバ/Extensionとも実装済み。Node queue test合格。 |
 | REQ-N-008 | 連続要求で結果を混線させず、メモリが無制限に増加しないこと。 | 20件直列は成功。100件後のメモリ推移は未検証。 |
 | REQ-N-009 | メッセージ単位の翻訳用途では最大品質より、翻訳品質を保てる短文レイテンシとメモリ効率を優先すること。 | Qwen3-8B-4bit で基準値を取得済み。比較モデルと合否閾値は未決定。 |
@@ -60,7 +60,7 @@
 | ID | 制約 |
 | --- | --- |
 | CON-001 | 対象は macOS、Apple Silicon、native arm64 Python、MLX、`mlx-lm`、Qwen MLX量子化モデルである。 |
-| CON-002 | 初期モデルは `mlx-community/Qwen3-8B-4bit`。Qwen3.5採用は比較検証なしに確定しない。 |
+| CON-002 | 初期モデルの記録は Qwen3-8B。現行設定の Qwen3.5-9B の固定は第12節で定義する。今回の変更はモデルの品質比較を含めない。 |
 | CON-003 | 独自推論サーバ、FastAPI、Flask、新しい Web framework は、公式 `mlx_lm.server` で満たせない実測上の必要が出るまで追加しない。 |
 | CON-004 | APIは`stream=true`とし、製品固有のserver-side訳文cache、speculative decoding、複数モデル同時常駐を追加しない。 |
 | CON-005 | CORS は認証ではなく、同一Mac上の別プロセスを排除する境界とは扱わない。 |
@@ -314,3 +314,33 @@ REQ-P-008: MUST — macOS Chrome 拡張の起動に連動して Native Messaging
 外部動作は SPEC-PROVIDER-005、判断は ADR-010 を正本とする。
 受け入れ条件: 起動完了前の操作を待機し、起動失敗・競合を成功扱いせず、接続終了で補助を停止する。自動翻訳を追加しない。
 Node test 101件成功。macOS 登録、起動完了、停止、入力と sender 拒否、競合時の認証非初期化を検証した。2026-10-13にユーザが実機の翻訳動作と補助プロセスを確認し、実機動作確認の完了を報告した。本変更の受け入れを合格とし、ユーザの指定により開発を完了した。
+
+## 12. 依存関係とモデルの固定 (2026-10-14)
+
+ユーザは ADR-011 と実装計画の Task 1〜4 を承認した。
+MUST は必須を表す。
+
+| ID | レベル | 要求 | 対応仕様 |
+| --- | --- | --- | --- |
+| REQ-SC-001 | MUST | Python の全依存と許可 wheel の hash を固定する。 | SPEC-SUPPLY-001 |
+| REQ-SC-002 | MUST | 導入は PyPI に限定し、設定上書きと source build を拒否する。 | SPEC-SUPPLY-001 |
+| REQ-SC-003 | MUST | モデルの commit、読込み対象ファイル、hash を固定する。 | SPEC-SUPPLY-002 |
+| REQ-SC-004 | MUST | 不足・改変・未登録モデルは推論の起動前に拒否する。 | SPEC-SUPPLY-002 |
+| REQ-SC-005 | MUST | 通常起動はモデル取得と依存導入を行わない。 | SPEC-SUPPLY-002 |
+| REQ-SC-006 | MUST | モデル由来の Python コードと pickle 重みを拒否する。 | SPEC-SUPPLY-002 |
+| REQ-SC-007 | MUST | npm 外部依存ゼロと同梱コード限定の実行を維持する。 | SPEC-SUPPLY-003 |
+| REQ-SC-008 | MUST | EOL と非推奨技術を採用せず、更新時に公式情報を確認する。 | SPEC-SUPPLY-004 |
+| REQ-SC-009 | MUST | 両翻訳先、認証、queue、cache、保存、手動操作を維持する。 | SPEC-SUPPLY-003 |
+
+ローカルの固定環境は macOS 26+ / arm64 / CPython 3.14 とする。
+現行起動設定の Qwen3.5-9B を固定し、品質比較は追加しない。
+`MODEL` は台帳内の選択に制限し、任意パスを受け付けない。
+Node.js はサポート中の LTS を使用し、基準環境は 24 とする。
+
+採用時の確認は、安全性の完全な証明ではない。
+同一ユーザ権限によるソースと台帳の同時改変は防御範囲外とする。
+検証の実施結果は実装計画に記録する。
+
+2026-10-14、ユーザが動作確認の完了を報告した。
+今回の実 Chrome 受け入れを合格とし、開発を完了する。
+個別操作と異常系の実機試験内訳は未報告である。

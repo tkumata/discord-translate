@@ -3,7 +3,7 @@
 2026-10-02承認の順次表示を実装済み。第12節に詳細を記載する。自動・実モデル検証は成功、実Chromeも2026-10-02のユーザーによるTask 5実機確認で合格した。入力KV cacheの実機確認結果は仕様書SPEC-KV-001を参照する。
 
 - Status: Current
-- Last reviewed: 2026-10-06
+- Last reviewed: 2026-10-14
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
 - Maintainability: 2026-10-06の責務分離は完了。Node test 72件成功、実Chrome受け入れはユーザの実機確認で合格。
@@ -37,7 +37,7 @@
 [実装済み] mlx_lm.server 0.31.3
                 │ local model load
                 ▼
-[cache済み・検証済み] mlx-community/Qwen3-8B-4bit
+[commit・全ファイル固定] mlx-community/Qwen3.5-9B-MLX-4bit
 
 [未実装] launchd LaunchAgent
 ```
@@ -52,9 +52,9 @@ Chrome Extensionのcontent script/service worker/bridge、Node自動検証、実
 | Extension service worker | sender/input/bridge Port 検証、SHA-256、固定 payload、FIFO queue、120秒 job 監督、HTTP status・stream検証・累積・購読・最終応答検証、`invalid_response` 診断、重複排除、memory cache、受信完成訳の永続保存と検索、結果返却 | Discord DOM、実 HTTP fetch、推論、本文永続化 | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
 | Extension document bridge | 検証済み Port、固定 localhost URL への 120秒 POST、SSE解析・chunk/end通知、HTTP 200 SSE不正時の`invalid_response`診断 | page message、任意 URL/payload、queue/cache、最終 API schema、storage | 順次表示は実装・Node/実モデル検証済み、Task 5実Chrome確認合格（ユーザー報告） |
 | Extension popup | 全 Discord タブ共通の`enabled` 状態遷移、LNA prompt を trigger する固定 `/health` GET、5秒 timeout、厳密 health 検証、本文なし状態 code 表示 | Discord DOM、翻訳本文、chat completion、queue/cache | 実装済み・Node test 合格・実 Chrome health 成功 |
-| `scripts/start-server.sh` | 起動入力検証、loopback/CORS/offline/concurrency/log 設定、server exec | HTTP API 再実装、request 内容検証、cache | 実装済み |
+| `scripts/start-server.sh` | 起動入力検証、モデル検証の呼出し、loopback/CORS/offline/concurrency/log 設定、server exec | HTTP API 再実装、request 内容検証、cache | 実装済み |
 | `mlx_lm.server` | HTTP endpoint、モデルロード、生成処理 | Discord UI、製品固有 queue/cache | 依存として利用中 |
-| Qwen MLX model | 翻訳文生成 | 入力経路、権限、ログ方針 | Qwen3-8B-4bit を 検証済み |
+| Qwen MLX model | 翻訳文生成 | 入力経路、権限、ログ方針 | 現行 Qwen3.5-9B を commit と全ファイル hash で固定 |
 | `scripts/verify.py` | 固定非機密ケースで server 契約・CORS・直列性を検証 | 実 Chrome UI、LAN 別端末、100件 stress | 実装済み |
 | launchd LaunchAgent | login 起動、process lifecycle | 翻訳仕様、Extension UI | 未実装・後続フェーズ |
 
@@ -568,3 +568,34 @@ loopback listen は sandbox 内で EPERM となったため、制限外の同じ
 ユーザは実機動作確認の完了を報告し、開発完了を指定した。この報告に基づき本変更の実 Chrome 受け入れを合格とし、開発を完了する。
 エージェント自身の Chrome 操作は行っていない。無効化・Chrome 完全終了・再認証の個別試験内訳は未報告であり、それぞれの試験を実施済みとは記録しない。
 完了記録の更新は文書だけで、成功済みの自動テストは再実行していない。
+
+## 19. 固定した依存とモデルの検証 (2026-10-14)
+
+判断は [ADR-011](../adr/011-verified-dependency-and-model-inputs.md) に従う。
+既存の翻訳・認証経路は変更しない。
+
+| 所有者 | 責務 |
+| --- | --- |
+| `requirements.txt` | 全 Python 依存の版と許可 wheel の SHA-256。 |
+| `setup_local.py` | strict な依存台帳受付、設定を遮断した新規 venv 導入、由来の記録。 |
+| `models.lock.json` | 許可 repo、commit、全対象ファイルと SHA-256。 |
+| `model_assets.py` | 台帳検証、取得物の段階的配置、起動前の完全性とコード参照の検証。 |
+| `start-server.sh` | 検証成功後だけ絶対ローカルパスを公式 CLI へ渡す。 |
+| `manifest.json` | 同梱 script と固定 loopback だけを許可する CSP。 |
+
+モデルの取得と通常起動を別操作にする。
+検証処理は標準ライブラリだけで動作する。
+取得処理だけが固定済みの `huggingface_hub` に依存する。
+新しい proxy、推論 wrapper、パッケージ管理ツールは追加しない。
+公式 CLI の内部実装は変更しない。
+
+信頼の起点は運用者が確認したソースと台帳である。
+導入記録とローカルの hash 検査を独立した署名とは扱わない。
+同一ユーザが台帳と実行コードを同時に改変する攻撃は防げない。
+同一端末の任意 HTTP 要求を公式サーバから排除する設計ではない。
+未知の依存コードとモデル parser の欠陥は残存リスクとする。
+検証の実施結果は active plan に記録する。
+
+2026-10-14、ユーザが動作確認の完了を報告した。
+今回の実 Chrome 受け入れを合格とし、開発を完了する。
+個別操作と異常系の実機試験内訳は未報告である。

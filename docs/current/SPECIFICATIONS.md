@@ -3,7 +3,7 @@
 2026-10-02承認のstreamingを実装済み。第12節に通信・表示の詳細と入力KV cacheの実機確認結果を記載する。実ChromeもユーザーのTask 5実機確認により合格した。
 
 - Status: Current
-- Last reviewed: 2026-10-12
+- Last reviewed: 2026-10-14
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
 
@@ -21,7 +21,7 @@
 
 | 変数 | 既定値 | 検証 |
 | --- | --- | --- |
-| `MODEL` | `mlx-community/Qwen3-8B-4bit` | 空、`-`開始、改行・復帰・タブを拒否する。 |
+| `MODEL` | `mlx-community/Qwen3.5-9B-MLX-4bit` | 空、`-`開始、制御空白、台帳未登録値を拒否する。 |
 | `PORT` | `8080` | 1〜65535の10進整数だけを許可する。 |
 | `CORS_ORIGIN` | なし | `chrome-extension://` と `a`〜`p` の32文字IDだけを許可し、指定を必須とする。 |
 
@@ -33,7 +33,7 @@
 
 - host: `127.0.0.1`
 - port: `PORT`
-- model: `MODEL`
+- model: 台帳と照合したモデルの絶対ローカルパス
 - allowed origin: `CORS_ORIGIN` の1件だけ
 - thinking: server側 `enable_thinking=false`
 - prompt concurrency: 1
@@ -43,6 +43,9 @@
 - telemetry: `HF_HUB_DISABLE_TELEMETRY=1`
 
 起動中はフォアグラウンドで動作し、`Ctrl-C` で停止する。実装状態: 実装済み・offline再起動確認済み。
+
+起動前のモデル検証は SPEC-SUPPLY-002 を参照する。
+通常起動は依存導入とモデル取得を行わない。
 
 ## 3. HTTP API仕様
 
@@ -739,3 +742,90 @@ Native 接続終了・拡張無効化・Chrome 完全終了時は進行中の要
 無限再起動、競合プロセスの停止、既存サーバの引き継ぎは行わない。
 補助を起動するだけでは自動翻訳・本文送信を行わない。Native 経路へ本文・認証情報を渡さない。
 初回登録・解除・再登録の手順は README の ChatGPT セットアップを参照する。
+
+## 17. サプライチェーン対策 (2026-10-14)
+
+本節の要求レベルは MUST とする。
+判断は [ADR-011](../adr/011-verified-dependency-and-model-inputs.md) に従う。
+
+### SPEC-SUPPLY-001 依存導入
+
+`scripts/setup_local.py` は新規 venv だけに導入する。
+対象は macOS 26+ / arm64 / CPython 3.14 とする。
+`--python-source` は運用者が確認した Python の取得元を受け取る。
+既存 venv と空の取得元は拒否する。
+
+`requirements.txt` は `name==version --hash=sha256:...` だけを許可する。
+追加 index、URL、別の要件ファイル、未固定依存は受け付けない。
+導入処理は `PIP_*` と `PYTHON*` 環境変数を子プロセスから除く。
+導入処理は `PIP_CONFIG_FILE` に `os.devnull` を設定する。
+pip の通常設定による追加配布元を遮断する。
+pip は `--require-hashes --only-binary=:all:` で導入する。
+pip の index は `https://pypi.org/simple` に固定する。
+導入失敗時は代替手段へ切り替えず、非ゼロで終了する。
+導入成功後は `pip check` を行う。
+導入記録は venv 内の `supply-chain-install.json` に保存する。
+記録は commit、dirty 状態、依存台帳 hash、Python と pip の由来を含む。
+
+### SPEC-SUPPLY-002 モデル取得と起動
+
+`models.lock.json` の schema version は 1 とする。
+台帳は default model とモデル別の commit・ファイル情報を持つ。
+ファイル情報は名前、サイズ、SHA-256 に限定する。
+許可するファイル形式は JSON、Jinja template、safetensors とする。
+現在の登録モデルは Qwen3.5-9B の固定 commit 1件とする。
+
+`scripts/model_assets.py fetch` は台帳のファイルだけを取得する。
+取得元は `https://huggingface.co` の固定 commit とする。
+取得に認証 token は使用しない。
+`--from-cache` は指定した snapshot から対象ファイルをコピーする。
+取得処理は一時領域の全ファイルを検証後、配置を確定する。
+既存の配置は上書きせず、再検証する。
+
+`verify` はネットワークと外部 Python package を使用しない。
+起動時は `verify` の成功後だけ公式 MLX CLI を実行する。
+検証は台帳未登録、余分なファイル、不足、サイズ・hash 不一致を拒否する。
+検証は不正なファイル名とモデル領域外への symlink を拒否する。
+検証は config と tokenizer config の動的コード指定を拒否する。
+対象は `model_file`、`auto_map`、`custom_pipelines` とする。
+組込み `qwen3_5` と `TokenizersBackend` だけを許可する。
+custom な `chat_template_type` と `tool_parser_type` は拒否する。
+検証失敗時は固定エラーを標準エラーへ出し、exit code 2 とする。
+
+CLI は `trust_remote_code` に None を渡す。
+フラグ省略を明示的な False の設定とは扱わない。
+固定データと組込み実装への限定でモデル由来のコード参照を閉じる。
+標準入力は `/dev/null` とし、対話による許可を行わない。
+公式サーバの API は変更しない。
+同一端末の任意クライアントによるモデル切替は保護範囲外である。
+拡張の既存 payload は任意モデルや adapter を受け付けない。
+
+### SPEC-SUPPLY-003 拡張機能の実行境界
+
+Manifest V3 と既存の権限を維持する。
+Extension pages の CSP は次のとおりとする。
+
+```text
+script-src 'self'; object-src 'none';
+connect-src http://127.0.0.1:8080 http://127.0.0.1:8766;
+```
+
+CSP は同梱 iframe、popup、worker に適用する。
+CSP は Native host と Discord 本体には適用しない。
+認証画面への navigation と外部 API fetch は区別する。
+package.json の ESM 設定は維持する。
+外部 npm 依存の追加は方針検査で検出する。
+両翻訳先と既存の要求・保存・認証の境界は維持する。
+
+### SPEC-SUPPLY-004 更新と検証の境界
+
+更新時は公式の配布元、保守状況、非推奨情報、公開勧告を確認する。
+更新時は全依存とモデル台帳の差分をレビューする。
+通常起動に更新処理を追加しない。
+導入、異常系、両翻訳先、CSP の回帰を検証してから採用する。
+実 Chrome、実モデル、実 API と自動テストの結果は分けて記録する。
+未知の悪意、配布元の侵害、parser の欠陥がないとは保証しない。
+
+2026-10-14、ユーザが動作確認の完了を報告した。
+今回の実 Chrome 受け入れを合格とし、開発を完了する。
+個別操作と異常系の実機試験内訳は未報告である。

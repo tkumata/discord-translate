@@ -17,5 +17,6 @@
 
 | [ADR-009](009-chatgpt-plan-translation.md) | Accepted, implementation in progress | 2026-10-12 | local / chatgpt 選択と認証・翻訳専用のloopback補助を追加する。 |
 | [ADR-010](010-native-messaging-startup.md) | Accepted, implemented; Chrome verified by user | 2026-10-13 | Native Messaging で ChatGPT 補助を拡張起動に連動させる。 |
+| [ADR-011](011-verified-dependency-and-model-inputs.md) | Accepted; implemented; Chrome verified by user | 2026-10-14 | Python 配布物とモデルを固定・検証し、両翻訳先を維持する。 |
 
-Qwen3.5採用、queue 2、FastAPI/Flask、launchdの詳細は未決定であり、現時点ではADRを作成しない。
+現行 Qwen3.5 モデルの固定は ADR-011 に記録する。queue 2、FastAPI/Flask、launchd の詳細は未決定であり、現時点では ADR を作成しない。

@@ -8,6 +8,7 @@ MODEL="${MODEL:-mlx-community/Qwen3.5-9B-MLX-4bit}"
 PORT="${PORT:-8080}"
 CORS_ORIGIN="${CORS_ORIGIN:-}"
 SERVER="${PROJECT_DIR}/.venv/bin/mlx_lm.server"
+PYTHON="${PROJECT_DIR}/.venv/bin/python"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -31,12 +32,15 @@ esac
 export HF_HUB_OFFLINE=1
 export HF_HUB_DISABLE_TELEMETRY=1
 
+MODEL_PATH="$("${PYTHON}" -I "${SCRIPT_DIR}/model_assets.py" verify --model "${MODEL}")" || \
+  fail 'model verification failed; acquire the locked model before starting the server'
+
 exec "${SERVER}" \
-  --model "${MODEL}" \
+  --model "${MODEL_PATH}" \
   --host 127.0.0.1 \
   --port "${PORT}" \
   --allowed-origins "${CORS_ORIGIN}" \
   --chat-template-args '{"enable_thinking":false}' \
   --decode-concurrency 1 \
   --prompt-concurrency 1 \
-  --log-level CRITICAL
+  --log-level CRITICAL </dev/null
