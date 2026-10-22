@@ -3,7 +3,8 @@
 2026-10-02承認のstreamingを実装済み。第12節に通信・表示の詳細と入力KV cacheの実機確認結果を記載する。実ChromeもユーザーのTask 5実機確認により合格した。
 
 - Status: Current
-- Last reviewed: 2026-10-14
+- Last reviewed: 2026-10-22
+- Native startup: SPEC-PROVIDER-007 は完了。実 Chrome はユーザ確認で合格。
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
 
@@ -851,3 +852,31 @@ macOS 標準 `/usr/sbin/lsof` で listener の所有を確認する。登録は�
 実 Chrome と自動検証の結果は [実装計画](../plans/active/2026-10-14-provider-server-startup.md) に分けて記録する。
 
 2026-10-14、ユーザの実機確認完了報告に基づき、本変更の実 Chrome 受け入れを合格とし、完了した。個別操作と異常系の実機試験内訳は未報告である。
+
+## 19. Node.js 更新に追従する起動 (2026-10-22)
+
+### SPEC-PROVIDER-007 起動時の Node.js 選択
+
+- MUST: nvm 管理下の登録では、起動時に対応 Node.js を選択する。
+- MUST: 登録した管理ルート内の実行可能な候補だけを調べる。
+- MUST: 24 以上で `process.release.lts` を持つ候補を対象とする。
+- MUST: major、minor、patch の数値順で最新版を選択する。
+- MUST: 旧版削除後も、残った対応版で再登録せずに起動する。
+- MUST: default と LTS alias の未設定・参照切れに依存しない。
+- MUST: npm、Chrome の PATH、シェル初期化ファイルに依存しない。
+- MUST: Node.js の取得、alias 更新、他の導入元の探索を行わない。
+- MUST: 実行不能な候補は診断を残し、対象から外す。
+- MUST: 対応版がなければ stderr で通知し、非ゼロで終了する。
+- MUST: 診断や候補確認の出力を Native stdout に混ぜない。
+- MUST: Chrome の引数と入力を Native host に引き継ぐ。
+- MUST: SPEC-PROVIDER-006 の ready 待機と停止の契約を維持する。
+
+nvm 管理外は登録時の Node.js の絶対パスを使う。
+新方式への移行時は、既存 installer で一度登録を更新する。
+リポジトリ、nvm の管理ルート、拡張 ID の変更は再登録を要する。
+サポート中 LTS の導入は利用環境の要件として維持する。
+LTS 属性だけでは EOL を判定できないため、自動判定は行わない。
+Node test 112 件は成功した。
+2026-10-22、ユーザの動作確認報告により実 Chrome の受け入れは合格。
+個別操作と実環境の旧版削除による試験内訳は未報告である。
+記録は [実装計画](../plans/active/2026-10-22-native-host-node-resolution.md) を参照する。

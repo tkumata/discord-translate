@@ -3,7 +3,8 @@
 2026-10-02承認の順次表示を実装済み。第12節に詳細を記載する。自動・実モデル検証は成功、実Chromeも2026-10-02のユーザーによるTask 5実機確認で合格した。入力KV cacheの実機確認結果は仕様書SPEC-KV-001を参照する。
 
 - Status: Current
-- Last reviewed: 2026-10-14
+- Last reviewed: 2026-10-22
+- Native startup: 第21節は完了。実 Chrome はユーザ確認で合格。
 - Approved addition: 第13節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
 - Theme addition: 第15節は完了。実機受け入れはユーザの再確認で合格。
 - Maintainability: 2026-10-06の責務分離は完了。Node test 72件成功、実Chrome受け入れはユーザの実機確認で合格。
@@ -615,7 +616,7 @@ loopback listen は sandbox 内で EPERM となったため、制限外の同じ
 | `chatgpt-native-host.mjs` | 共通の caller 検証、Native framing、受信拒否、EOF/signal とサーバ寿命。ChatGPT の起動入口も維持する。 |
 | `local-native-host.mjs` | 固定スクリプトの子プロセス、listener 所有と health の確認、子プロセスグループの停止。 |
 | `start-server.sh` | 従来どおりモデル照合・offline・telemetry 無効・loopback・CORS と公式 MLX 起動。 |
-| `install-native-host.mjs` | 両固定 host の manifest と絶対パス launcher を登録する。 |
+| `install-native-host.mjs` | 両固定 host の manifest と launcher を登録する。nvm の Node.js 選択は第21節に従う。 |
 
 ローカル子プロセスの stdout/stderr は Native stdout に流さない。本文・訳文・認証情報を診断へ追加しない。
 `/health` が正常でも他のプロセスの応答なら ready にしない。自分の子プロセスのポート8080所有を macOS の `/usr/sbin/lsof` で確認する。
@@ -625,3 +626,33 @@ loopback listen は sandbox 内で EPERM となったため、制限外の同じ
 検証とユーザ実機確認の受け入れ記録は [実装計画](../plans/active/2026-10-14-provider-server-startup.md) を参照する。
 
 2026-10-14、ユーザの実機確認完了報告に基づき、本変更の実 Chrome 受け入れを合格とし、完了した。個別操作と異常系の実機試験内訳は未報告である。
+
+## 21. Native host の Node.js 選択 (2026-10-22)
+
+判断は [ADR-013](../adr/013-resolve-nvm-node-at-startup.md) とする。
+対応要求は REQ-P-010、外部動作は SPEC-PROVIDER-007 とする。
+
+installer は `process.execPath` の実体パスから nvm 配下かを判定する。
+installer は管理ルートの `nvm.sh` の存在を確認する。
+nvm の場合、両 launcher に管理ルートの絶対パスを保存する。
+launcher は `versions/node/v*/bin/node` の候補を調べる。
+候補の実行結果から、24 以上の LTS を選択対象にする。
+候補のバージョンを数値で比較し、最新版を選ぶ。
+管理ルートを限定し、nvm の表示解析と alias 解決を避ける。
+シェル初期化ファイルと `nvm.sh` は実行しない。
+
+候補の確認には `/dev/null` を入力として渡す。
+候補の確認結果は捕捉し、失敗の診断は stderr へ出す。
+対応版がなければ `native_host_node_unavailable` で終了する。
+対応版があれば、固定 host と Chrome の引数を渡して `exec` する。
+host に中間シェルを残さず、Native 入力と signal の契約を維持する。
+nvm 管理外は既存の Node.js の絶対パスを使う。
+
+回帰試験は一時 HOME で登録時の Node.js 実体を削除する。
+複数版の LTS 属性は fixture で再現し、launcher を実行する。
+選択した runtime、引数、PID、Native frame と停止を確認する。
+新メジャー LTS の実バイナリによる互換性確認とは区別する。
+Node test 112 件は成功した。
+2026-10-22、ユーザの動作確認報告により実 Chrome の受け入れは合格。
+個別操作と実環境の旧版削除による試験内訳は未報告である。
+詳細は [実装計画](../plans/active/2026-10-22-native-host-node-resolution.md) を参照する。
