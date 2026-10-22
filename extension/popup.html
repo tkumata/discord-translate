@@ -9,26 +9,40 @@
 </head>
 
 <body>
-  <label for="provider">翻訳先
-    <select id="provider">
-      <option value="local">ローカル</option>
-      <option value="chatgpt">ChatGPT</option>
-    </select>
-  </label>
-  <section id="chatgpt" hidden aria-label="ChatGPT 接続">
-    <p>翻訳する本文を OpenAI に送信し、ChatGPT の利用枠を使います。</p>
-    <p id="account-status" role="status">未接続</p>
-    <button id="connect" type="button">Continue with ChatGPT</button>
-    <button id="refresh" type="button">接続状態を確認</button>
-    <button id="disconnect" type="button">切断</button>
-    <p><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT の利用量を管理</a></p>
-  </section>
-  <label>
-    <input id="enabled" type="checkbox">
-    有効
-  </label>
-  <p id="status" role="status" aria-live="polite">無効</p>
-  <p id="error-code" hidden></p>
+  <header>
+    <h1>Discord Translator</h1>
+  </header>
+  <main>
+    <div>
+      <label for="provider">翻訳先</label>
+      <select id="provider">
+        <option value="local">ローカル</option>
+        <option value="chatgpt">ChatGPT</option>
+      </select>
+    </div>
+    <section id="chatgpt" class="panel" hidden aria-labelledby="chatgpt-heading">
+      <h2 id="chatgpt-heading">ChatGPT 接続</h2>
+      <p>翻訳する本文を OpenAI に送信し、ChatGPT の利用枠を使います。</p>
+      <p id="account-status" role="status">未接続</p>
+      <div class="connection-actions">
+        <button id="connect" type="button">Continue with ChatGPT</button>
+        <div class="secondary-actions">
+          <button id="refresh" type="button">接続状態を確認</button>
+          <button id="disconnect" type="button">切断</button>
+        </div>
+      </div>
+      <p><a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">ChatGPT の利用量を管理</a></p>
+    </section>
+    <section class="panel activation" aria-label="有効化">
+      <label class="enable-control">
+        <input id="enabled" type="checkbox" aria-describedby="enabled-description">
+        <span>Discord Translator を有効にする</span>
+      </label>
+      <p id="enabled-description">有効にすると Discord に翻訳ボタンを表示します。翻訳はボタンを押したときに実行します。</p>
+      <p id="status" role="status" aria-live="polite">無効</p>
+      <p id="error-code" hidden></p>
+    </section>
+  </main>
   <script type="module" src="popup.js"></script>
 </body>
 

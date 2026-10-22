@@ -207,9 +207,9 @@ listenerはIPv4 loopbackのみである。CORSは実Extension originに限定す
 | `extension/bridge.html` | 非表示 Extension document と外部入力を持たない静的 script 入口 |
 | `extension/bridge.js` | 固定 Port job の検証、固定 localhost POST、120秒 timeout、固定result envelope |
 | `extension/styles.css` | 翻訳 button、loading、訳文、error、再試行 button の最小表示。テーマの代替配色だけDiscordのテーマclassを参照する |
-| `extension/popup.html` | `enabled` checkbox と本文なし接続状態の静的markup |
+| `extension/popup.html` | 拡張名、翻訳先、ChatGPT 接続、有効化と状態をまとめる静的 markup |
 | `extension/popup.js` | pure export 可能な有効化状態遷移、固定health GET、5秒 timeout、厳密 schema、`chrome.storage.local`同期 |
-| `extension/popup.css` | disabled checkbox と状態 code の最小 layout |
+| `extension/popup.css` | popup の配置、明色・暗色、3 箇所のアクセントと操作状態の装飾 |
 | `extension/package.json` | Node に ES module として test 対象を解釈させる`{"type":"module","private":true}` だけ。依存なし |
 | `extension/tests/service-worker.test.js` | 要求Port、既定bridge配線、global fetch不使用、bridge→queueの順次表示と購読の結合検証 |
 | `extension/tests/translation-protocol.test.js` | sender/input、固定payload、最終応答、thinking・usage・stream検証 |
@@ -656,3 +656,22 @@ Node test 112 件は成功した。
 2026-10-22、ユーザの動作確認報告により実 Chrome の受け入れは合格。
 個別操作と実環境の旧版削除による試験内訳は未報告である。
 詳細は [実装計画](../plans/active/2026-10-22-native-host-node-resolution.md) を参照する。
+
+## 22. ポップアップの情報整理 (2026-10-22)
+
+対応要求は REQ-POPUP-001〜005、外部動作は SPEC-POPUP-001 とする。
+状態: 完了。2026-10-22、修正後のユーザの動作確認報告を受けて完了した。
+
+`popup.html` は見出し、翻訳先、接続、有効化を意味ごとにまとめる。
+既存の ID、label、状態通知と hidden 制御の契約を維持する。
+checkbox の操作説明は `aria-describedby` で関連付ける。
+`popup.css` は配置と見た目だけを所有する。
+配色は CSS 変数と `prefers-color-scheme` で切り替える。
+アクセントは見出し下線、select の枠、有効化領域の左線に限定する。
+hover、focus、disabled は既存の操作要素へ適用する。
+長い値は折り返し、状態やエラーの情報を切り捨てない。
+
+`popup.js` は既存の状態遷移を維持する。
+画面のラベルに合わせて、切替後と認証後の案内文だけを更新する。
+DOM の変更から新しい通信処理や状態管理を呼び出さない。
+検証と受け入れ記録は [実装計画](../plans/active/2026-10-22-popup-layout.md) を参照する。
