@@ -19,5 +19,6 @@
 | [ADR-010](010-native-messaging-startup.md) | Accepted, implemented; Chrome verified by user | 2026-10-13 | Native Messaging で ChatGPT 補助を拡張起動に連動させる。 |
 | [ADR-011](011-verified-dependency-and-model-inputs.md) | Accepted; implemented; Chrome verified by user | 2026-10-14 | Python 配布物とモデルを固定・検証し、両翻訳先を維持する。 |
 | [ADR-012](012-provider-specific-server-startup.md) | Accepted; implemented; Chrome verified by user | 2026-10-14 | 保存済みの翻訳先に応じてサーバを起動し、切替・終了時に自分のサーバを停止する。 |
+| [ADR-013](013-resolve-nvm-node-at-startup.md) | Accepted; implemented; Chrome verified by user | 2026-10-22 | nvm の対応 LTS を起動時に選び、Node.js 更新後の再登録を不要にする。 |
 
 現行 Qwen3.5 モデルの固定は ADR-011 に記録する。queue 2、FastAPI/Flask、launchd の詳細は未決定であり、現時点では ADR を作成しない。
