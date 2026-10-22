@@ -144,7 +144,6 @@ export function mountPopup({
   const accountStatus = documentApi.querySelector("#account-status");
   const connectButton = documentApi.querySelector("#connect");
   const disconnectButton = documentApi.querySelector("#disconnect");
-  const refreshButton = documentApi.querySelector("#refresh");
   let provider = "local";
 
   function showProvider() {
@@ -164,7 +163,7 @@ export function mountPopup({
   }
 
   async function runAction(action) {
-    const controls = [enabledInput, providerInput, connectButton, disconnectButton, refreshButton].filter(Boolean);
+    const controls = [enabledInput, providerInput, connectButton, disconnectButton].filter(Boolean);
     controls.forEach((element) => { element.disabled = true; });
     try { await action(); }
     catch { showProvider(); showStatus("操作に失敗しました。補助プログラムと接続状態を確認してください"); }
@@ -244,7 +243,6 @@ export function mountPopup({
       showStatus("認証後にポップアップを開き直し、「Discord Translator を有効にする」を ON にしてください");
     });
   });
-  refreshButton?.addEventListener("click", () => { void runAction(refreshConnection); });
   disconnectButton?.addEventListener("click", () => {
     void runAction(async () => {
       await setEnabled(false);

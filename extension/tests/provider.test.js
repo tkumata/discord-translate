@@ -144,13 +144,13 @@ test("receive and draft errors explain ChatGPT reauthentication and usage recove
   assert.equal(draft.model.text, "元の下書き");
 });
 
-test("popup changes provider while OFF, checks only that provider and opens only helper login URLs", async () => {
-  const ids = ["enabled", "provider", "chatgpt", "account-status", "connect", "disconnect", "refresh", "status", "error-code"];
+test("popup checks ChatGPT on open and provider change, gates enable and opens only helper login URLs", async () => {
+  const ids = ["enabled", "provider", "chatgpt", "account-status", "connect", "disconnect", "status", "error-code"];
   const elements = Object.fromEntries(ids.map((id) => [id, popupElement()]));
-  const storage = storageFixture();
+  const storage = storageFixture({ provider: "chatgpt" });
   const tabs = [];
   let healthy = 0;
-  let connected = false;
+  let connected = true;
   let loginUrl = "http://127.0.0.1:8766/auth/login?state=synthetic";
   const paths = [];
   const companionRequest = async (path) => {
@@ -168,7 +168,13 @@ test("popup changes provider while OFF, checks only that provider and opens only
     companionRequest, healthCheck: async () => { healthy++; return { ok: true }; } });
   const idle = () => waitFor(() => !elements.enabled.disabled);
   await idle();
-  assert.equal(paths.length, 0);
+  assert.deepEqual(paths, ["/status"]);
+  assert.equal(elements["account-status"].textContent, "接続済み: test@example.invalid / model");
+  assert.equal(elements.enabled.checked, false);
+  assert.equal(healthy, 0);
+  elements.provider.value = "local"; elements.provider.change(); await idle();
+  assert.deepEqual(paths, ["/status"]);
+  connected = false;
   elements.enabled.checked = true; elements.enabled.change(); await idle();
   assert.equal(storage.data.enabled, true);
   assert.equal(healthy, 1);
@@ -176,6 +182,8 @@ test("popup changes provider while OFF, checks only that provider and opens only
   assert.equal(storage.data.provider, "chatgpt");
   assert.equal(storage.data.enabled, false);
   assert.equal(elements.chatgpt.hidden, false);
+  assert.deepEqual(paths, ["/status", "/status"]);
+  assert.equal(elements["account-status"].textContent, "未接続");
   elements.enabled.checked = true; elements.enabled.change(); await idle();
   assert.equal(storage.data.enabled, false);
   assert.equal(elements.enabled.checked, false);
