@@ -229,7 +229,7 @@ export function mountPopup({
       provider = next;
       enabledInput.checked = false;
       showProvider();
-      showStatus("無効。有効を ON にすると選択した翻訳先を使用します");
+      showStatus("無効。「Discord Translator を有効にする」を ON にすると選択した翻訳先を使用します");
       if (provider === "chatgpt") await refreshConnection();
     });
   });
@@ -241,7 +241,7 @@ export function mountPopup({
         throw new Error("invalid_response");
       }
       await chromeApi.tabs.create({ url: url.href });
-      showStatus("認証後にポップアップを開き直し、有効を ON にしてください");
+      showStatus("認証後にポップアップを開き直し、「Discord Translator を有効にする」を ON にしてください");
     });
   });
   refreshButton?.addEventListener("click", () => { void runAction(refreshConnection); });
