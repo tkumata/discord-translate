@@ -513,7 +513,6 @@ content fixtureは非公開関数をsourceへ追記せず、Manifest順の実scr
 エージェントによる実Chrome操作と、個別の操作状態・異常系の実機試験内訳は未確認である。
 残る可読性の改善は今後の別作業とし、今回の完了範囲へ追加しない。
 
-
 ## 17. ローカル / ChatGPT の選択 (2026-10-12)
 
 状態: 完了。判断は ADR-009 を正本とする。
@@ -603,7 +602,6 @@ loopback listen は sandbox 内で EPERM となったため、制限外の同じ
 今回の実 Chrome 受け入れを合格とし、開発を完了する。
 個別操作と異常系の実機試験内訳は未報告である。
 
-
 ## 20. 選択先サーバの自動起動 (2026-10-14)
 
 判断は [ADR-012](../adr/012-provider-specific-server-startup.md)、外部動作は SPEC-PROVIDER-006 を正本とする。
@@ -663,7 +661,9 @@ Node test 112 件は成功した。
 状態: 完了。2026-10-22、修正後のユーザの動作確認報告を受けて完了した。
 
 `popup.html` は見出し、翻訳先、接続、有効化を意味ごとにまとめる。
-既存の ID、label、状態通知と hidden 制御の契約を維持する。
+2026-10-23 の承認により、手動の接続状態確認ボタンと専用イベント処理を削除する。
+削除対象の `refresh` を除き、既存の ID、label、状態通知と hidden 制御の契約を維持する。
+`refreshConnection` はポップアップ表示時と ChatGPT への切替時の自動確認に使用する。
 checkbox の操作説明は `aria-describedby` で関連付ける。
 `popup.css` は配置と見た目だけを所有する。
 配色は CSS 変数と `prefers-color-scheme` で切り替える。
