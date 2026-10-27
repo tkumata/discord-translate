@@ -1,399 +1,227 @@
 # 要件定義書
 
-2026-10-02に順次表示を承認・実装した。追加要求は第7節を参照する。自動・実モデル検証は成功、実ChromeもユーザーのTask 5実機確認により合格し、本変更は完了した。
+## 1. 概要
 
-- Status: Current
-- Last reviewed: 2026-10-22
-- Native startup: Issue #1 は完了。実 Chrome の受け入れはユーザ確認で合格。
-- Approved addition: 第8節は実装・自動/実モデル検証済み。実Chrome受け入れはユーザ確認で合格。
-- Theme addition: 第10節は完了。実機受け入れはユーザの再確認で合格。
-- Product: Discord ローカル日本語翻訳
+本書は Discord Translator の現在のコードに対応する要件を定義する。
+MUST は必須の動作または生成指示、SHOULD は品質上の目標を表す。
+生成指示の存在と、モデルが常に指示へ従うことは区別する。
 
-## 1. 目的と読み方
+製品目的は [PRD](PRD.md)、外部動作は [仕様書](SPECIFICATIONS.md) を参照する。
+責務と依存関係は [設計書](DESIGN.md) を参照する。
+過去の判断と検証結果は `docs/adr/` と `docs/plans/` に置く。
 
-本書は、1台の Apple Silicon Mac 上で動かす個人用 Discord Web 翻訳システムの現在有効な要求を定義する。外部動作の詳細は [SPECIFICATIONS.md](SPECIFICATIONS.md)、責務配置は [DESIGN.md](DESIGN.md)、製品目的は [PRD.md](PRD.md)、完了した実装履歴は [実行計画](../plans/completed/2026-08-18-local-discord-translator.md) を参照する。
+## 2. スコープ
 
-状態は次の意味で使う。
+対象は macOS の Google Chrome で開く Discord Web である。
+受信メッセージの日訳と、投稿前の下書きの英訳を提供する。
+翻訳先は `local` と `chatgpt` の2種類とする。
 
-- `実装済み`: リポジトリに対応実装がある。
-- `未実装`: 要求は有効だが対応実装がない。
-- `一部実装`: 要求の一部だけに対応実装がある。
-- `未検証`: 実装はある、または設計上想定しているが、必要な実機検証が完了していない。
+自動翻訳、自動投稿、周辺会話の収集、汎用 API は提供しない。
+Discord デスクトップアプリと非テキストの下書きは対象外とする。
 
-## 2. 機能要求
+## 3. 前提条件
 
-| ID | 要求 | 現在状態 |
+- 共通ランタイムは Node.js 24 以上の LTS を基準とする。
+- ローカル翻訳は macOS 26 以降の Apple Silicon を対象とする。
+- ローカル依存の導入には native arm64 の CPython 3.14 を使う。
+- ローカルモデルは `models.lock.json` の台帳で固定する。
+- ChatGPT はアカウント接続と利用枠の許可を必要とする。
+- 自動起動には、利用する拡張 ID で Native host を登録する。
+- 固定ポートを使うため、複数プロファイルの同時利用は対象外とする。
+
+## 4. 機能要件
+
+### 4.1 受信メッセージ
+
+| ID | Level | 要件 |
 | --- | --- | --- |
-| REQ-F-001 | ON中の現在表示中・新規Discordメッセージごとに`翻訳`ボタンを1つ表示し、そのボタンを押したメッセージだけを自然な日本語へ翻訳できること。DOM検出やボタン生成だけでは翻訳を依頼しないこと。 | 実装済み・Node test合格・実Chrome動作確認済み。 |
-| REQ-F-002 | 翻訳 API は `POST /v1/chat/completions` を受け付け、SSEの `choices[0].delta.content` を順次取得し、正常終了・usage・終端を検証して確定できること。 | 実装済み・実機検証済み。 |
-| REQ-F-003 | 翻訳結果だけを返し、解説、原文の反復、thinking/reasoning を表示しないこと。 | 実装済み。固定ケースでは検証済み。 |
-| REQ-F-004 | URL、Markdown、ユーザー名、`@username`、`#channel`、コード、インラインコード、製品名、API名、ライブラリ名、識別子、絵文字を意味上必要な範囲で保持すること。 | 一部検証済み。実ID検証ではdaily/discord/code/japanese/prompt/serialが成功し、Markdown/URL caseの`**the patch**`不変条件が未合格。スラングと長い複数文の目視品質も未検証。 |
-| REQ-F-005 | 日本語入力でも異常な出力をせず、意味を変えないこと。 | 固定1ケースのみ検証済み。 |
-| REQ-F-006 | Qwen の MLX 4bit 量子化モデルを使い、環境変数 `MODEL` で台帳に登録したモデルを選択できること。 | 実装済み。現在の固定モデルと検証範囲は第12節。 |
-| REQ-F-007 | `./scripts/start-server.sh` で起動し、フォアグラウンドでは `Ctrl-C` で停止できること。 | 実装済み・実機検証済み。 |
-| REQ-F-008 | 既存の `/health` で HTTP サーバ状態を確認し、実 chat completion で model readiness を確認できること。 | 実装済み・実機検証済み。 |
-| REQ-F-009 | Chrome content scriptは利用者の`翻訳`または`再試行`押下時だけservice workerへ翻訳を依頼し、service workerがsender/input、固定payload、queue/cache、最終応答を所有すること。localhostへの翻訳HTTP送信だけは、同じDiscord tab内の検証済みExtension document bridgeへ委譲すること。popupはLNA許可取得用の`/health`確認だけを行える。 | 実装済み・Node test合格・実Chrome検証済み。 |
-| REQ-F-010 | Chrome Extension 側が受け付け順の有限 queue を所有し、初期同時実行数を1にすること。 | 実装済み。concurrency 1、最大64 unique job、queue待機120秒をNode testで検証済み。 |
-| REQ-F-011 | Chrome Extension 側で翻訳キャッシュを所有し、サーバ側には初期段階でキャッシュを追加しないこと。 | 実装済み。memory cache 256件・30分と受信完成訳の5日間保存をNode testで検証済み。受信保存の実Chrome受け入れはユーザ確認で合格。サーバ側 cache は追加していない。 |
-| REQ-F-012 | 押下後は`翻訳中…`として重複押下を抑止すること。bridge fetchとservice worker job監督は120秒の有限timeoutで一致させ、超過時は`request_timeout`とすること。生成中から原文直下の訳文を更新し、成功時に確定し、失敗時は部分訳を除去して原文を残してservice workerの固定error codeと`再試行`を表示すること。本文変更・DOM差し替え時は古い結果を破棄し、新本文用の`翻訳`へ戻すこと。 | 実装・Node test済み。旧方式は実Chrome確認済み。順次表示もTask 5で合格（2026-10-02ユーザー報告）。 |
-| REQ-F-013 | 基本機能と結合検証が完了した後、macOS ログイン時に `launchd` で自動起動できること。 | 未実装。 |
-| REQ-F-014 | popupでOFFからONへ切り替えるとき、Extension documentから固定`/health`へ接続してChromeのLocal Network Access許可を取得し、health成功時だけ`enabled=true`へ遷移すること。 | 実装済み・Node test合格・実Chrome正常系/異常系検証済み。 |
-| REQ-F-015 | ON中の各Discord top tabにExtension package内の非表示bridgeを1個だけ置き、既定翻訳経路は検証済みPort経由の固定payloadだけを固定localhost APIへ送ること。bridgeはpage message、任意URL、任意payloadを受理せず、OFF・tab unloadで破棄されること。 | 実装済み・Node test合格・実Chrome動作確認済み。 |
+| REQ-F-001 | MUST | ON 中は対象メッセージごとに「翻訳」を1つ表示する。 |
+| REQ-F-002 | MUST | 固定 API の SSE から訳文を取得し、正常完了後に確定する。 |
+| REQ-F-003 | MUST | 日訳は必要な補足を許可し、英訳は訳文だけを出すよう指示する。thinking は表示しない。 |
+| REQ-F-004 | MUST | URL、Markdown、コード、識別子、絵文字の保持を指示する。 |
+| REQ-F-005 | SHOULD | 日本語の入力でも主要な意味を保つ。 |
+| REQ-F-009 | MUST | 手動要求だけを worker へ渡し、翻訳 HTTP は同じタブの bridge に委譲する。 |
+| REQ-F-012 | MUST | 重複押下を抑止し、失敗時は部分訳を除去して原文と再試行を残す。 |
+| REQ-F-015 | MUST | ON 中の Discord top frame に非表示 bridge を1個配置する。 |
 
-## 3. 非機能要求
+<a id="7-訳文の順次表示の追加要求2026-10-02"></a>
+<a id="16-受信訳のニュアンス補足案-2026-10-27"></a>
 
-| ID | 要求 | 現在状態 |
+### 4.2 順次表示と補足
+
+| ID | Level | 要件 |
 | --- | --- | --- |
-| REQ-N-001 | Discord 本文を外部 LLM API、翻訳 API、telemetry、analytics へ送らないこと。 | サーバ単体は offline 起動し、確認時に外部 TCP 接続なし。Extension を含む全経路は未検証。 |
-| REQ-N-002 | API は IPv4 loopback `127.0.0.1` だけで listen し、LAN・インターネットへ公開しないこと。 | loopback listener は確認済み。LAN 別端末からの拒否は未検証。 |
-| REQ-N-003 | CORS は実際の `chrome-extension://<EXTENSION_ID>` だけを許可し、`*` や Discord page origin を許可しないこと。 | 実IDのpreflight、`/health`、実Chrome bridge fetch、disallowed originを検証済み。 |
-| REQ-N-004 | 通常ログに request body、prompt、response、翻訳本文を保存しないこと。 | CRITICAL 設定と通常要求で本文非出力を確認済み。不正JSONを含むprivacy marker試験は未実施。 |
-| REQ-N-005 | 通常運用ではモデルを事前 cache し、`HF_HUB_OFFLINE=1` と telemetry 無効で起動すること。 | 実装済み・offline再起動確認済み。 |
-| REQ-N-006 | システム Python を汚さず、プロジェクトの `.venv` と最小依存で動作すること。 | 全34依存の版と wheel の SHA-256 を固定。第12節。 |
-| REQ-N-007 | 大量並列より安定性を優先し、サーバの prompt/decode concurrency と Extension queue を初期値1にすること。 | サーバ/Extensionとも実装済み。Node queue test合格。 |
-| REQ-N-008 | 連続要求で結果を混線させず、メモリが無制限に増加しないこと。 | 20件直列は成功。100件後のメモリ推移は未検証。 |
-| REQ-N-009 | メッセージ単位の翻訳用途では最大品質より、翻訳品質を保てる短文レイテンシとメモリ効率を優先すること。 | Qwen3-8B-4bit で基準値を取得済み。比較モデルと合否閾値は未決定。 |
-| REQ-N-010 | Chrome の現行 Local Network Access、CORS、権限UIの下で、localhost以外へ権限を広げず動作すること。service workerはLNA promptを表示できないため、popup documentの固定health GETで事前許可を取得すること。 | 最小Manifest権限、実ID CORS preflight、実Chromeのpopup healthと翻訳動作、sender URL検証hotfixのNode testを確認済み。 |
-| REQ-N-011 | model load time、first request latency、subsequent request latency、tokens/sec、memory usageを同一条件で測定し、翻訳品質と合わせてmodelを評価できること。 | 単体generate速度・peak memoryとserver平均latency/RSSは取得済み。model load、first/warmの分離、比較modelは未測定。 |
+| REQ-F-016 | MUST | 生成中の受信訳を原文直下へ順次表示する。古い本文や DOM の結果を破棄する。 |
+| REQ-F-017 | MUST | 公式 MLX の入力 KV cache の仕組みを利用し、独自の入力 cache 層を設けない。 |
+| REQ-NUANCE-001 | MUST | スラング、冗談、文化的表現に、必要な短い補足を付けるよう指示する。 |
+| REQ-NUANCE-002 | MUST | 補足に根拠の表現を示し、一般的用法と今回の解釈候補を区別するよう指示する。 |
+| REQ-NUANCE-003 | MUST | 根拠が不足する感情や真意を断定せず、文脈不足を示すよう指示する。 |
+| REQ-NUANCE-004 | MUST | 両翻訳先で同じ日訳指示を使い、補足に別の要求を追加しない。 |
 
-## 4. 制約
+補足は最大2項目、各1〜2文を指示する。
+訳文と補足の表示には `textContent` を使う。
+出力に `[補足]` が含まれる場合だけ固定の注意書きを表示する。
+生成中、完成時、保存復元に同じ表示条件を適用する。
+周辺会話とプロフィールは取得しない。
 
-| ID | 制約 |
+<a id="8-投稿前の英語翻訳の追加要求案2026-10-05"></a>
+
+### 4.3 投稿前の英語翻訳
+
+| ID | Level | 要件 |
+| --- | --- | --- |
+| REQ-F-018 | MUST | ON 中は対象の投稿入力欄に「英語に翻訳」を1つ表示する。 |
+| REQ-F-019 | MUST | 押下時だけ下書きを翻訳する。空白のみ、上限超過、非対応入力は送信しない。 |
+| REQ-F-020 | MUST | 完成した英訳だけを、同じ入力欄へ反映する。 |
+| REQ-F-021 | MUST | 拡張機能は Discord への投稿操作を行わない。 |
+| REQ-F-022 | MUST | 翻訳失敗時は下書きを保持し、手動再試行を受け付ける。 |
+| REQ-F-023 | MUST | 編集、投稿先移動、入力欄交換、OFF 後の古い結果を適用しない。 |
+| REQ-F-024 | MUST | 翻訳方向ごとに job と cache を分離し、共通のキューと通信経路を使う。 |
+| REQ-F-025 | MUST | 英訳後も編集を継続でき、「元に戻す」で直前の下書きを復元できる。 |
+
+IME 変換中と非テキスト要素を含む下書きでは操作を抑止する。
+途中の英訳は入力欄へ反映しない。
+復元では、英訳へ加えた編集も翻訳前の内容へ置き換える。
+
+### 4.4 翻訳先の選択と接続
+
+| ID | Level | 要件 |
+| --- | --- | --- |
+| REQ-P-001 | MUST | 翻訳先を local / chatgpt から選択する。初期値は local とする。 |
+| REQ-P-002 | MUST | ChatGPT の本文外部送信と利用枠の消費をポップアップに表示する。 |
+| REQ-P-003 | MUST | OAuth で利用許可を得て、認証情報を保護した端末内ファイルへ保存する。 |
+| REQ-P-004 | MUST | ChatGPT 補助だけが認証情報と OpenAI 通信を扱う。 |
+| REQ-P-005 | MUST | 切断後の遅延 callback / refresh で認証情報を復活させない。 |
+| REQ-P-006 | MUST | 翻訳先別に job と cache を分離し、切替時の古い表示を破棄する。 |
+| REQ-P-007 | MUST | 両翻訳先で同じ入力検証、手動操作、受信保存を使う。 |
+| REQ-F-014 | MUST | OFF から ON へ移る前に、選択先の起動と接続を確認する。 |
+
+翻訳先の切替は OFF に戻す。
+ChatGPT 未接続時と接続確認失敗時は有効化しない。
+OFF は表示と購読を破棄し、下書きと保存訳を保持する。
+
+<a id="9-受信翻訳文の5日間保持案2026-10-05"></a>
+
+### 4.5 キューとキャッシュ
+
+| ID | Level | 要件 |
+| --- | --- | --- |
+| REQ-F-010 | MUST | worker 側に有限 FIFO を置き、同時実行数を1にする。 |
+| REQ-F-011 | MUST | 共通のメモリキャッシュと、受信専用の永続キャッシュを拡張内に置く。 |
+| REQ-F-026 | MUST | 検証済みの受信完成訳だけを、補足を含めて端末内へ保存する。 |
+| REQ-F-027 | MUST | 保存訳の有効期間を初回保存成功から120時間とする。 |
+| REQ-F-028 | MUST | ON 中は表示メッセージに一致する有効な保存訳を復元する。 |
+| REQ-F-029 | MUST | メッセージ ID と、翻訳先・本文・生成指示版の識別値で照合する。 |
+| REQ-F-030 | MUST | 保存訳の検索と復元では翻訳 API を呼ばない。 |
+| REQ-F-031 | MUST | 下書き、投稿用英訳、独立した原文、途中訳、失敗結果を永続保存しない。 |
+| REQ-F-032 | MUST | OFF、編集、DOM 交換、ID 変更後に旧検索結果を表示しない。 |
+
+
+補足に引用された原文の一部は、完成結果に含めて保存する。
+復元と有効期間内の再保存では期限を延長しない。
+生成指示版の異なる保存訳は復元せず、既存の期限で削除する。
+
+### 4.6 表示と操作
+
+| ID | Level | 要件 |
+| --- | --- | --- |
+| REQ-F-033 | MUST | Discord 内のボタンを、Discord の表示テーマに合わせる。 |
+| REQ-F-034 | MUST | テーマ変更を、再読込やボタン再生成なしで反映する。 |
+| REQ-POPUP-001 | MUST | ポップアップの見出しに `Discord Translator` を表示する。 |
+| REQ-POPUP-002 | MUST | 翻訳先、ChatGPT 接続、有効化の順に情報を配置する。 |
+| REQ-POPUP-003 | MUST | 接続状態を表示時と ChatGPT 選択時に取得する。手動の接続状態確認ボタンは設けない。 |
+| REQ-POPUP-004 | MUST | CSS で装飾し、見出し、選択欄、有効化領域に青紫のアクセントを使う。 |
+| REQ-POPUP-005 | MUST | 明暗テーマ、長い状態文、focus、disabled を判読できるようにする。 |
+
+## 5. 非機能要件
+
+| ID | Level | 要件 |
+| --- | --- | --- |
+| REQ-N-001 | MUST | local の本文処理を Mac 内に閉じる。chatgpt は指定本文と指示だけを OpenAI へ送る。 |
+| REQ-N-002 | MUST | サーバは `127.0.0.1` だけで待ち受ける。 |
+| REQ-N-003 | MUST | CORS の許可先を登録した拡張 origin に限定する。 |
+| REQ-N-004 | MUST | 本文、訳文、認証情報を通常の診断ログへ出さない。 |
+| REQ-N-005 | MUST | local の通常起動は offline とし、モデルの取得を行わない。 |
+| REQ-N-006 | MUST | ローカル依存をプロジェクトの `.venv` へ導入する。 |
+| REQ-N-007 | MUST | Extension と MLX の推論を直列で処理する。 |
+| REQ-N-008 | MUST | キュー、メモリキャッシュ、出力に上限を設け、要求を有限時間で終える。 |
+| REQ-N-010 | MUST | ブラウザのセキュリティ設定を無効化せず、固定 loopback 宛先だけを許可する。 |
+| REQ-N-012 | MUST | 保存失敗を固定コードで示し、原文と完成訳の表示を保持する。 |
+| REQ-N-013 | MUST | 有効な保存訳を件数制限や LRU で早期削除しない。 |
+| REQ-N-014 | MUST | 両テーマで通常、hover、focus、disabled を区別する。 |
+
+翻訳の意味と不変要素の保持はモデル依存の品質目標である。
+構造検証だけで意味の正しさを合格にしない。
+補足の出現頻度と、ローカルモデルの解釈には制約がある。
+
+## 6. 外部インターフェース要件
+
+| 境界 | 要件 |
 | --- | --- |
-| CON-001 | 対象は macOS、Apple Silicon、native arm64 Python、MLX、`mlx-lm`、Qwen MLX量子化モデルである。 |
-| CON-002 | 初期モデルの記録は Qwen3-8B。現行設定の Qwen3.5-9B の固定は第12節で定義する。今回の変更はモデルの品質比較を含めない。 |
-| CON-003 | 独自推論サーバ、FastAPI、Flask、新しい Web framework は、公式 `mlx_lm.server` で満たせない実測上の必要が出るまで追加しない。 |
-| CON-004 | APIは`stream=true`とし、製品固有のserver-side訳文cache、speculative decoding、複数モデル同時常駐を追加しない。 |
-| CON-005 | CORS は認証ではなく、同一Mac上の別プロセスを排除する境界とは扱わない。 |
-| CON-006 | `launchd` はChrome Extensionを含む基本機能と結合検証の完了後に実装する。 |
-| CON-007 | 未確認のChrome挙動、翻訳品質、モデル安定性を完了済みと表現しない。 |
-| CON-008 | bridge方式でも`web_accessible_resources`は`bridge.html`とDiscord originだけに限定し、`externally_connectable`、`offscreen` permission、Discord originのCORS許可、Chrome security無効化を追加しない。 |
+| Discord DOM | 本文と入力欄を特定し、無関係な要素や返信プレビューを翻訳対象にしない。 |
+| Chrome messaging | sender、frame、tab、メッセージ形式を検証する。 |
+| local API | 公式 `mlx_lm.server` の固定 loopback HTTP / SSE を使う。 |
+| ChatGPT 補助 | 固定ルートと固定翻訳 payload だけを受け付ける。 |
+| Native Messaging | 登録拡張だけを許可し、起動完了以外の任意コマンドを受け付けない。 |
 
-## 5. 受け入れ条件と追跡
+## 7. データ要件
 
-| ID | 受け入れ条件 | 対応要求 | 対応仕様 | 現在結果 |
-| --- | --- | --- | --- | --- |
-| AC-001 | popupで有効化すると現在表示中と新規の各Discordメッセージに`翻訳`ボタンが1つ表示され、走査・DOM検出・ボタン生成だけでは翻訳用Port要求も翻訳POSTも発生しない。ボタン1回の押下につき1要求Portとなり、`翻訳中…`では連打を抑止し、生成中から原文直下へ部分訳を表示し、成功時に確定し、失敗時は部分訳を除去して固定codeと`再試行`を表示する。OFFでは挿入UIを除去してPOSTせず、本文変更・DOM差し替え後の古い結果は破棄して新本文用の`翻訳`へ戻す。 | REQ-F-001, REQ-F-009, REQ-F-012 | SPEC-EXT-001〜003 | 順次表示のNode test合格。旧方式の実Chrome確認済み。新方式もTask 5で合格（2026-10-02ユーザー報告） |
-| AC-002 | APIが英語短文を日本語へ変換し、翻訳結果だけを返す。 | REQ-F-002, REQ-F-003 | SPEC-API-001, SPEC-API-003 | 合格（固定ケース） |
-| AC-003 | URL、Markdown、コード、Discord識別子、絵文字を固定ケースで保持する。 | REQ-F-004 | SPEC-TR-001 | 実ID検証でdaily/discord/code/japanese/prompt/serialは成功。Markdown/URLの`**the patch**`不変条件は未合格 |
-| AC-004 | thinking/reasoning、空応答、truncation、schema不正を成功扱いにしない。SHA-256失敗は`hash_error`、fetchの`NotAllowedError`/`SecurityError`は`lna_denied`、120秒timeoutは`request_timeout`、その他fetch拒否と未知値は`network_error`になり、本文・URL・`error.message`を露出しない。 | REQ-F-003, REQ-F-012 | SPEC-API-003, SPEC-EXT-003, SPEC-ERR-001 | streamingのNode test合格。旧方式の実Chrome境界検証合格。新方式のTask 5実機確認も合格（2026-10-02ユーザー報告） |
-| AC-005 | listenerが `127.0.0.1` のみで、LAN別端末から接続できない。 | REQ-N-002 | SPEC-SEC-001 | listener合格、LAN拒否未検証 |
-| AC-006 | 実Extension originのみCORS許可され、Discord originは許可されない。 | REQ-N-003, REQ-N-010 | SPEC-SEC-002, SPEC-EXT-004 | 実IDの`/health`、CORS preflight、実Chrome翻訳動作、disallowed originを検証済み |
-| AC-007 | cache済みモデルでoffline起動し、翻訳中にloopback以外のTCP接続がない。 | REQ-N-001, REQ-N-005 | SPEC-SEC-003 | サーバ単体で合格。Extension全経路未検証 |
-| AC-008 | 通常ログとエラー経路に固定privacy markerが残らない。 | REQ-N-004 | SPEC-LOG-001 | 通常要求のみ確認。不正JSON marker未検証 |
-| AC-009 | Extensionの64件以下のburstをconcurrency 1で処理し、重複jobを1要求へまとめ、100件後もRSSが無制限に増え続けない。 | REQ-N-007, REQ-N-008 | SPEC-QUEUE-001 | Nodeでqueue順序、dedupe、limit、timeoutを合格。100件RSSと実UIは未検証 |
-| AC-010 | 基本機能完了後、ログイン時にloopback/offline条件を保って自動起動・明示停止できる。 | REQ-F-013 | SPEC-OS-001 | 未実装 |
-| AC-011 | model load、first/warm latency、tokens/sec、RSSを同一条件で記録し、固定翻訳ケースと合わせて採用modelを説明できる。 | REQ-N-009, REQ-N-011 | SPEC-PERF-001 | 一部測定済み。load・first/warm分離・比較modelは未測定 |
-| AC-012 | 日本語、スラング、複数文、技術Discord文を目視し、意味保持と自然さを確認する。 | REQ-F-004, REQ-F-005 | SPEC-TR-001 | 日本語固定1ケースと実IDの一部固定caseは成功。Markdown/URL条件は未合格、目視品質は未検証 |
-| AC-013 | 新規project-local venvへ固定依存を導入し、modelを環境変数で選び、1コマンド起動、health/readiness、停止、再起動が成功する。 | REQ-F-006, REQ-F-007, REQ-F-008, REQ-N-006 | SPEC-SRV-001, SPEC-SRV-002, SPEC-API-004 | Qwen3-8B-4bitで合格 |
-| AC-014 | Extensionが30分・最大256件のmemory cacheを所有し、同一正規化本文の重複要求をserverへ再送せず、原文と投稿用の訳文を永続保存せず、server側に製品cacheを追加しない。受信完成訳だけはSPEC-CACHE-001〜004で5日間保存する。 | REQ-F-011 | SPEC-QUEUE-001 | Node自動検証合格。受信保存の実Chrome受け入れはユーザ確認で合格。 |
-| AC-015 | OFF→ON時はpopupが接続確認中となり、LNA許可後の`GET http://127.0.0.1:8080/health`が5秒以内にHTTP 200かつ厳密な`{"status":"ok"}`を返した場合だけONになる。拒否・timeout・network・HTTP・schema失敗ではOFFを維持して固定codeを表示し、ON→OFFはhealthなしで即時反映する。 | REQ-F-014, REQ-N-010 | SPEC-EXT-001, SPEC-EXT-004 | popup・Node test・実Chrome health/翻訳/error code検証合格 |
-| AC-016 | 正規Discord top tabの検証済みbridgeだけがservice worker構築payloadを固定APIへ送信し、serverでbrowser由来`POST`を観測できる。既定経路はservice workerのglobal fetchを呼ばない。別tab、別URL、top frame、重複Port、不正envelope、page messageではfetchせず、OFF・unload・disconnectは固定errorで終了する。 | REQ-F-009, REQ-F-015, REQ-N-001, REQ-N-003, REQ-N-010 | SPEC-EXT-003〜005, SPEC-SEC-002 | 既定bridge配線とglobal fetch不使用を含むNode test合格・実Chrome動作確認済み |
+設定と受信保存訳は `chrome.storage.local` に置く。
+`storage.sync` と Discord ページの `localStorage` は使用しない。
+認証情報は `~/.config/discord-translate/chatgpt.json` に置く。
+期限切れの保存訳は直ちに復元対象から外す。
+物理削除は worker 起動、保存、該当項目の検索で行う。
+拡張が停止中の厳密な時刻の物理削除は保証しない。
 
-Phase 5.6実装前の実Chrome UIでは一部messageが成功し、一部が`request_timeout`となり、server側で応答write時の`BrokenPipeError`を確認した。当時の既定経路は設計済みbridgeではなくservice worker direct fetchで、両実装のtimeoutも25秒だった。Phase 5.6でbridge配線を復旧して両監督を120秒へ揃え、対象test 22件とExtension全体35件が合格し、実装後の実Chromeで翻訳動作を確認した。利用者の確認により、手動翻訳変更とbridge是正を完了とする。
+## 8. 運用要件
 
-## 6. 要求トレーサビリティ
-
-| 要求ID | 仕様 | 受け入れ条件 |
+| ID | Level | 要件 |
 | --- | --- | --- |
-| REQ-F-001 | SPEC-EXT-001, EXT-002 | AC-001 |
-| REQ-F-002 | SPEC-API-001, API-003 | AC-002 |
-| REQ-F-003 | SPEC-API-002, API-003, API-004 | AC-002, AC-004 |
-| REQ-F-004 | SPEC-TR-001 | AC-003, AC-012 |
-| REQ-F-005 | SPEC-TR-001 | AC-012 |
-| REQ-F-006 | SPEC-SRV-001, SRV-002, PERF-001 | AC-011, AC-013 |
-| REQ-F-007 | SPEC-SRV-001, SRV-002 | AC-013 |
-| REQ-F-008 | SPEC-API-004 | AC-013 |
-| REQ-F-009 | SPEC-EXT-003 | AC-001 |
-| REQ-F-010 | SPEC-QUEUE-001 | AC-009 |
-| REQ-F-011 | SPEC-QUEUE-001 | AC-014 |
-| REQ-F-012 | SPEC-EXT-001, EXT-003, ERR-001, ERR-002 | AC-004 |
-| REQ-F-013 | SPEC-OS-001 | AC-010 |
-| REQ-F-014 | SPEC-EXT-001, EXT-004 | AC-015 |
-| REQ-F-015 | SPEC-EXT-003, EXT-004, EXT-005 | AC-016 |
-| REQ-N-001 | SPEC-SEC-003 | AC-007 |
-| REQ-N-002 | SPEC-SEC-001 | AC-005 |
-| REQ-N-003 | SPEC-EXT-004, SEC-002 | AC-006 |
-| REQ-N-004 | SPEC-LOG-001 | AC-008 |
-| REQ-N-005 | SPEC-SRV-002, SEC-003 | AC-007 |
-| REQ-N-006 | SPEC-SRV-001 | AC-013 |
-| REQ-N-007 | SPEC-SRV-002, QUEUE-001 | AC-009 |
-| REQ-N-008 | SPEC-QUEUE-001 | AC-009 |
-| REQ-N-009 | SPEC-PERF-001 | AC-011 |
-| REQ-N-010 | SPEC-EXT-004, SEC-002 | AC-006, AC-015 |
-| REQ-N-011 | SPEC-PERF-001 | AC-011 |
+| REQ-F-006 | MUST | 台帳の固定モデルを使用し、手動起動の `MODEL` も台帳内に限定する。 |
+| REQ-F-007 | MUST | ローカルサーバは既存スクリプトで起動でき、foreground では `Ctrl-C` で停止できる。 |
+| REQ-F-008 | MUST | local は `/health`、chatgpt は `/status` で接続確認する。 |
+| REQ-P-008 | MUST | Chrome 拡張から Native Messaging で選択先を起動する。 |
+| REQ-P-009 | MUST | 切替時は旧接続を閉じ、選択先だけを起動する。所有しないサーバを引き継がない。 |
+| REQ-P-010 | MUST | nvm 配下はインストール済みの Node.js 24 以上の LTS から数値順で最新版を選ぶ。 |
+| REQ-SC-001 | MUST | Python 依存の全バージョンと許可 wheel の hash を固定する。 |
+| REQ-SC-002 | MUST | 導入は PyPI と binary wheel に限定し、pip 設定の上書きを遮断する。 |
+| REQ-SC-003 | MUST | モデルの commit、全対象ファイル、サイズ、hash を固定する。 |
+| REQ-SC-004 | MUST | 不足、改変、未登録のモデルは起動前に拒否する。 |
+| REQ-SC-005 | MUST | 通常起動と依存・モデルの取得を分離する。 |
+| REQ-SC-006 | MUST | モデル由来の Python コード参照と pickle 重みを拒否する。 |
+| REQ-SC-007 | MUST | 拡張と Node 補助は同梱コードと標準機能を使い、外部 npm 依存を持たない。 |
+| REQ-SC-009 | MUST | 起動処理から本文を送信せず、認証、翻訳、保存の境界を分ける。 |
 
-## 7. 訳文の順次表示の追加要求（2026-10-02）
+OFF でも選択先サーバを維持する。
+拡張の無効化、Chrome の完全終了、Native 接続の終了でサーバを停止する。
+起動失敗時は操作時の再試行を可能にし、無限再起動は行わない。
+運用手順は [README](../../README.md) を参照する。
 
-| ID | 追加要求 | 状態 |
+<a id="5-受け入れ条件と追跡"></a>
+
+## 9. 受け入れ条件
+
+以下は現行動作の確認観点であり、実施済み試験の一覧ではない。
+
+| 対象 | 観測する条件 | 対応仕様 |
 | --- | --- | --- |
-| REQ-F-016 | 手動翻訳の生成中に訳文を順次表示し、生成中と確定済みを区別すること。途中失敗時は部分訳を除去して固定 error と再試行を表示すること。 | 承認・実装済み。Node/実モデル確認済み。Task 5実Chrome確認合格（2026-10-02ユーザー報告） |
-| REQ-F-017 | 現在のモデルと公式 MLX-LM のメモリ内入力 KV cache を維持し、異なる原文間でも共通入力 prefix を再利用すること。無効・未再利用を実測した場合だけ、原因に対応する最小変更を提案すること。 | 既存構成で再利用確認済み。追加変更不要 |
+| 有効化 | 選択先の接続確認成功時だけ ON になり、切替では OFF になる。 | SPEC-PROVIDER-001、SPEC-POPUP-001 |
+| 受信訳 | 手動操作でだけ要求し、原文の直下へ順次表示する。失敗後に再試行できる。 | SPEC-EXT-001、SPEC-STREAM-001〜003 |
+| 補足 | 訳文が先にあり、補足は必要な場合だけ付く。注意書きは `[補足]` と連動する。 | SPEC-NUANCE-001〜003 |
+| 下書き | 完成訳だけを同じ入力欄へ反映する。編集後の旧結果を破棄し、投稿しない。 | SPEC-COMPOSE-001〜004 |
+| 復元 | 元の下書きを空白・改行ごと戻し、英訳への編集を置き換える。 | SPEC-COMPOSE-005 |
+| 保存 | 120時間の境界、非延長、ID・本文・翻訳先・指示版の分離を満たす。 | SPEC-CACHE-001〜004 |
+| キュー | FIFO、単一実行、重複排除、上限、待機期限、実行期限を満たす。 | SPEC-QUEUE-001 |
+| 応答検証 | 空応答、thinking、切詰め、不完全 SSE、usage 不正を成功にしない。 | SPEC-API-003 |
+| 認証 | 不正署名、state、scope を拒否し、切断後の遅延保存を防ぐ。 | SPEC-PROVIDER-002 |
+| 起動 | readiness 前に操作せず、他の listener を採用・停止しない。 | SPEC-PROVIDER-005〜007 |
+| 依存・モデル | 既存 venv の上書き、不正台帳、改変ファイル、コード参照を拒否する。 | SPEC-SUPPLY-001〜003 |
+| 表示 | 明暗テーマでボタンと状態を読め、キーボード操作できる。 | SPEC-THEME-001、SPEC-POPUP-001 |
 
-| 受け入れ条件 | 観測可能な条件 | 追跡 | 状態 |
-| --- | --- | --- | --- |
-| AC-017 | 最初の非空 content が生成完了前に表示され、同じブロックで更新される。正常な終了・usage・stream 終端を検証した場合だけ確定して cache へ保存する。失敗、reasoning、truncation、OFF、本文編集、DOM 交換で部分訳を残さず、重複要求でも POST は1回である。 | REQ-F-016、SPEC-STREAM-001〜003 | Node/実モデルで合格。Task 5実Chrome確認も合格（2026-10-02ユーザー報告） |
-| AC-018 | 同じ system prompt と生成設定で異なる固定非機密英文を送信し、後続要求の `usage.prompt_tokens_details.cached_tokens > 0` を確認する。本文・訳文を出力・保存しない。 | REQ-F-017、SPEC-KV-001 | 非streamingで66 token、移行後のstreaming後続7件で66〜68 tokenを確認。起動設定変更なし |
+テストは `npm --prefix extension test` と Python の検証手段を使う。
+実モデルの意味評価、Chrome UI、LAN 境界、長時間安定性は別に確認する。
+実施した試験と未確認範囲は、対応する `docs/plans/` の記録へ残す。
 
-REQ-F-002、REQ-F-012、CON-004、AC-001を承認済み新仕様へ同期した。REQ-F-011/AC-014のserver側cache禁止は製品固有の訳文cacheを指し、既存の入力KV cacheは含めない。セキュリティ、privacy、有限queue/timeoutの要求は維持する。
+## 10. 未決事項
 
-## 8. 投稿前の英語翻訳の追加要求案（2026-10-05）
-
-状態: 2026-10-05承認・実装済み。実Chrome受け入れはユーザ確認で合格した。
-英語訳の下書き反映、編集継続、「元に戻す」はユーザ指定で確定した。
-本節は既存機能の承認状態を変更しない。
-MUSTは必須、SHOULDは推奨、MAYは任意を表す。
-
-| ID | レベル | 追加要求 |
-| --- | --- | --- |
-| REQ-F-018 | MUST | ON中は対象の投稿入力欄に「英語に翻訳」を1つ表示する。 |
-| REQ-F-019 | MUST | ボタン押下時だけ、日本語の下書きを英語へ翻訳する。 |
-| REQ-F-020 | MUST | 正常終了後、同じ入力欄の下書きを完成した英語訳へ置き換える。 |
-| REQ-F-021 | MUST | 拡張機能はDiscordへの投稿操作を実行しない。 |
-| REQ-F-022 | MUST | 翻訳失敗時、入力欄の下書きを変更しない。 |
-| REQ-F-023 | MUST | 翻訳中の編集・入力欄交換・移動・OFF後は結果を適用しない。 |
-| REQ-F-024 | MUST | 既存の翻訳経路を再利用し、翻訳先ごとにjobとcacheを分離する。 |
-| REQ-F-025 | MUST | 置換後も編集を続けられる。「元に戻す」で翻訳前の日本語の下書きへ戻せる。 |
-
-REQ-N-001〜008、REQ-N-010の境界は下書きにも適用する。
-下書きと英語訳は拡張機能の永続storageへ保存しない。
-既存の受信メッセージの日本語訳と順次表示は維持する。
-
-| ID | 受け入れ条件 | 追跡 |
-| --- | --- | --- |
-| AC-019 | ON中にボタンが1つ表示される。入力やDOM検出だけでは翻訳要求を送らない。 | REQ-F-018〜019、SPEC-COMPOSE-001〜002 |
-| AC-020 | 「明日の会議は10時です。」を英語の下書きへ置換する。途中訳は入力欄へ書かない。投稿は発生しない。 | REQ-F-020〜021、SPEC-COMPOSE-002〜003 |
-| AC-021 | 連打で要求を重複させない。空白のみ、上限超過、非対応入力は送信しない。 | REQ-F-019、SPEC-COMPOSE-001〜002 |
-| AC-022 | timeout、不正応答、切断時は下書きを保持する。固定codeを表示し、手動再試行できる。 | REQ-F-022、SPEC-COMPOSE-003 |
-| AC-023 | 編集、チャンネル移動、入力欄交換、OFF後の応答は下書きを置換しない。 | REQ-F-023、SPEC-COMPOSE-003 |
-| AC-024 | 同じ本文の日本語訳と英語訳はjobもcacheも共有しない。同じ翻訳先の重複排除は維持する。 | REQ-F-024、SPEC-COMPOSE-004 |
-| AC-025 | 英語訳の反映後も編集できる。「元に戻す」で翻訳直前の下書きを空白・改行も含めて復元する。復元前の英語訳への編集は残さない。翻訳と復元では投稿せず、添付ファイルを保持する。 | REQ-F-025、SPEC-COMPOSE-001〜003、005 |
-
-Node test 58件とPython self-checkは成功した。
-下書きの自動テストはAC-019〜025の状態と復元を検証した。
-実モデルでは英訳3ケースと既存の日本語訳1ケースが成功した。
-2026-10-05、ユーザは新機能が実機で意図どおりと報告した。
-新機能の実Chrome受け入れはユーザ確認により合格とする。
-個別の異常系・画面別の実機試験内訳は未報告である。
-実装順序は [実装計画](../plans/active/2026-10-05-compose-english-translation.md)を参照する。
-
-## 9. 受信翻訳文の5日間保持案（2026-10-05）
-
-状態: 2026-10-05承認・実装済み。Node自動検証成功。実Chrome受け入れはユーザ確認で合格。
-本節以外の既存機能の承認状態は変更しない。
-AC-014の永続保存禁止に、受信完成訳の例外を設ける。
-MUSTは必須、SHOULDは推奨、MAYは任意を表す。
-
-### 確定事項
-
-- 利用者は、表示された受信メッセージの翻訳文を5日間保持したい。
-- 利用者は、投稿入力欄の下書きと英語訳を永続保存しない。
-- 利用者は、投稿用の既存30分のメモリキャッシュを維持する。
-
-### 承認済み追加要求
-
-| ID | レベル | 要求 |
-| --- | --- | --- |
-| REQ-F-026 | MUST | 受信メッセージの検証済み完成訳だけを端末内に保存する。 |
-| REQ-F-027 | MUST | 正常保存済みの完成訳を、初回保存成功から120時間保持する。 |
-| REQ-F-028 | MUST | ON中は表示メッセージに一致する有効な保存訳を自動復元する。 |
-| REQ-F-029 | MUST | メッセージIDと原文のハッシュで保存訳を照合する。 |
-| REQ-F-030 | MUST | 保存訳の検索と復元では翻訳APIを呼ばない。 |
-| REQ-F-031 | MUST | 下書き、投稿用の英語訳、原文、途中訳、失敗結果を永続保存しない。 |
-| REQ-F-032 | MUST | OFF、編集、DOM交換、ID変更後に旧検索結果を表示しない。 |
-| REQ-N-012 | MUST | 保存失敗を固定codeで表示し、完成訳と原文を保持する。 |
-| REQ-N-013 | MUST | 有効期間内の保存訳を件数制限やLRUで早期削除しない。 |
-
-REQ-N-001〜010の既存通信・ログ・権限の境界を維持する。
-5日間の保存は受信翻訳専用とし、既存メモリキャッシュと分ける。
-復元時に保存期限を延長しない。
-保存できなかった完成訳の5日間保持は保証しない。
-期限切れデータは直ちに復元対象から外す。
-期限切れデータの物理削除は次のworker起動または保存操作で行う。
-
-### 承認済み受け入れ条件
-
-| ID | 受け入れ条件 | 追跡 |
-| --- | --- | --- |
-| AC-026 | チャンネル、DM、スレッドで遷移後に完成訳が復元される。再読込とworker再生成後も復元される。復元によるPOSTは0件である。 | REQ-F-026〜028、030、SPEC-CACHE-001〜003 |
-| AC-027 | 保存から120時間未満は復元される。120時間以上は復元されない。復元やOFF/ONで期限が延びない。有効な保存訳を早期削除しない。 | REQ-F-027、REQ-N-013、SPEC-CACHE-002 |
-| AC-028 | 編集後、同文の別メッセージ、返信プレビューへ旧訳を表示しない。検索中のOFF、DOM交換、ID変更で旧結果を破棄する。 | REQ-F-029、032、SPEC-CACHE-003 |
-| AC-029 | 下書きと投稿用の英語訳は保存されない。途中失敗と保存開始前に購読を解除した受信要求も保存されない。既存メモリキャッシュと共有jobは維持される。 | REQ-F-031、SPEC-CACHE-001 |
-| AC-030 | 容量不足や書込み失敗でも完成訳を表示する。保存失敗を固定codeで通知する。読込み失敗から手動翻訳へ進める。本文や訳文をログに出さない。 | REQ-N-012、SPEC-CACHE-004 |
-| AC-031 | 複数タブで別メッセージを同時に保存しても更新を失わない。原文は永続保存されない。保存先は同期されない端末内領域である。 | REQ-F-026、031、SPEC-CACHE-001、DESIGN第14節 |
-
-実装と検証の範囲は[実装計画](../plans/active/2026-10-05-received-translation-cache.md)に記載する。
-
-AC-026〜031の自動検証はNode test 70件で成功した。
-2026-10-05、ユーザはページ遷移後の訳文復元を実Chromeで確認した。
-新機能の受け入れはユーザ報告により合格とする。
-個別の画面と異常系の実機試験内訳は未報告である。
-実時間5日経過の確認は未実施である。
-5日期限は時計差替えによる境界テストで確認した。
-
-## 10. 翻訳ボタンのテーマ対応（2026-10-05）
-
-状態: 2026-10-05承認・実装済み。ユーザの実機再確認で合格し、タスク完了。
-MUSTは必須を表す。
-既存機能の承認状態は維持する。
-
-### 確定事項と承認済み範囲
-
-- 確定事項: 翻訳ボタンはlight modeとdark modeの両方に対応する。
-- 確定事項: 翻訳ボタンの配色は自動で切り替わる。
-- 承認済み: 追従先はOSのテーマではなく、Discordの表示テーマとする。
-- 承認済み: 「翻訳」「英語に翻訳」「再試行」「元に戻す」を対象とする。
-- 承認済み: 「確認中…」「翻訳中…」の無効状態も対象とする。
-- 承認済み: 実機確認はユーザが行う。
-- 対象外: popup、訳文ブロック、翻訳処理の変更。
-
-### 承認済み追加要求: 翻訳ボタンのテーマ対応
-
-| ID | レベル | 要求 |
-| --- | --- | --- |
-| REQ-F-033 | MUST | 対象ボタンの配色をDiscordの表示テーマに自動で合わせる。 |
-| REQ-F-034 | MUST | 表示中のテーマ変更を再読込やボタン再生成なしで反映する。 |
-| REQ-N-014 | MUST | 両テーマで通常、hover、focus、disabledの表示を識別できる。 |
-
-### 承認済み受け入れ条件: 翻訳ボタンのテーマ対応
-
-| ID | 受け入れ条件 | 追跡 |
-| --- | --- | --- |
-| AC-032 | 両テーマで全対象ボタンの背景、文字、境界線が判別できる。有効なボタンの文字と背景のコントラスト比は4.5:1以上である。 | REQ-F-033、REQ-N-014、SPEC-THEME-001 |
-| AC-033 | lightからdark、darkからlightへ変更すると既存ボタンの配色が変わる。ボタンの状態、下書き、翻訳結果は保持される。切替による翻訳POSTは0件である。 | REQ-F-034、SPEC-THEME-001 |
-| AC-034 | OSとDiscordのテーマが異なる場合もDiscordの表示テーマに従う。利用者による拡張機能のテーマ設定は不要である。 | REQ-F-033、SPEC-THEME-001 |
-| AC-035 | 両テーマで有効なボタンのhoverとキーボードfocusが判別できる。disabled中は押下を受け付けず、hoverで有効状態の配色にならない。 | REQ-N-014、SPEC-THEME-001 |
-
-検証方法はDESIGN第15節に記載する。
-Node test 70件とJavaScript構文検証は成功した。
-AC-032〜035の配色とテーマ切替は自動テストの検証対象外である。
-AC-032〜035の実機受け入れはユーザの再確認報告により合格とする。
-初回の実機確認では、両テーマで全ボタンの視認性が不合格だった。
-ユーザは「ほとんど何も見えない」と報告した。
-CSSの配色を修正した。
-2026-10-05、ユーザは実機再確認の合格とタスク完了を指定した。
-個別の操作状態の試験内訳とコントラストの実測値は未報告である。
-Open Questions: なし。
-
-## 11. ローカル / ChatGPT の選択 (2026-10-12)
-
-状態: 完了。Node test 91件成功。補助と実 API による固定文の日訳・英訳は成功。2026-10-12のユーザ実機動作確認により、本変更の実 Chrome 受け入れは合格。
-本節はローカル専用の要求と制約に選択可能な例外を設ける。
-REQ-N-001、005 と AC-007 の offline 条件はローカルに適用する。
-REQ-F-009、014、015 の接続先と popup 制限は本節で拡張する。
-CON-003 の例外として ChatGPT 認証・翻訳専用の補助を追加する。
-ローカルの公式 MLX サーバは維持する。
-
-| ID | 要求 | 仕様 |
-| --- | --- | --- |
-| REQ-P-001 | MUST: popup で local / chatgpt を選択し、初期値は local とする。 | SPEC-PROVIDER-001 |
-| REQ-P-002 | MUST: ChatGPT 時は本文の外部送信と利用枠の消費を明示する。 | SPEC-PROVIDER-001 |
-| REQ-P-003 | MUST: 公開 OAuth と利用許可で認証し、tokens を保護した端末内ファイルに保存する。 | SPEC-PROVIDER-002 |
-| REQ-P-004 | MUST: Node 標準機能の補助が外部通信を所有し、固定翻訳用途だけを受け付ける。 | SPEC-PROVIDER-003 |
-| REQ-P-005 | MUST: 切断後の遅延 callback / refresh で認証情報を復活させない。 | SPEC-PROVIDER-002 |
-| REQ-P-006 | MUST: 翻訳先別に cache と job を区別し、切替時の古い表示を破棄する。 | SPEC-PROVIDER-004 |
-| REQ-P-007 | MUST: 既存のローカル翻訳、入力検証、timeout、手動操作、5日保存を維持する。 | SPEC-PROVIDER-001〜004 |
-
-| 受け入れ条件 | 検証 |
-| --- | --- |
-| 未接続では ChatGPT を有効化しない。local は MLX health を使う。 | popup の動作 test |
-| 不正 state、claims、署名、scope、origin、payload を拒否する。 | 署名付き fixture / HTTP test |
-| refresh を直列化し、切断後の保存を拒否する。 | 非同期競合 test |
-| 完了前の切断、incomplete、usage 欠落を cache しない。 | streaming test |
-| provider が異なる同文を dedupe / 復元しない。 | queue / cache / worker test |
-| 切替で古い結果を適用せず、入力欄の下書きを保持する。 | content lifecycle test |
-| 実サインインと実翻訳が成功する。 | 認証と実機動作はユーザ報告で合格。固定文の日訳・英訳は実 API で成功 |
-| Chrome 上で選択、LNA、切断、両翻訳先を操作できる。 | 本変更の実機受け入れはユーザ報告で合格。個別操作の試験内訳は未報告 |
-
-2026-10-12、ユーザは実機で動作確認できたと報告し、完了を指示した。
-エージェント自身の実 Chrome 操作、個別の異常系、利用枠上限と長文品質の実機検証は行っていない。
-
-### 2026-10-13 ChatGPT 補助の自動起動
-
-REQ-P-008: MUST — macOS Chrome 拡張の起動に連動して Native Messaging で補助を起動し、手動コマンドを不要にする。登録した拡張だけを許可し、既存の認証・翻訳の境界を維持する。
-2026-10-14の起動先選択と停止条件は REQ-P-009 を優先する。
-外部動作は SPEC-PROVIDER-005、判断は ADR-010 を正本とする。
-受け入れ条件: 起動完了前の操作を待機し、起動失敗・競合を成功扱いせず、接続終了で補助を停止する。自動翻訳を追加しない。
-Node test 101件成功。macOS 登録、起動完了、停止、入力と sender 拒否、競合時の認証非初期化を検証した。2026-10-13にユーザが実機の翻訳動作と補助プロセスを確認し、実機動作確認の完了を報告した。本変更の受け入れを合格とし、ユーザの指定により開発を完了した。
-
-## 12. 依存関係とモデルの固定 (2026-10-14)
-
-ユーザは ADR-011 と実装計画の Task 1〜4 を承認した。
-MUST は必須を表す。
-
-| ID | レベル | 要求 | 対応仕様 |
-| --- | --- | --- | --- |
-| REQ-SC-001 | MUST | Python の全依存と許可 wheel の hash を固定する。 | SPEC-SUPPLY-001 |
-| REQ-SC-002 | MUST | 導入は PyPI に限定し、設定上書きと source build を拒否する。 | SPEC-SUPPLY-001 |
-| REQ-SC-003 | MUST | モデルの commit、読込み対象ファイル、hash を固定する。 | SPEC-SUPPLY-002 |
-| REQ-SC-004 | MUST | 不足・改変・未登録モデルは推論の起動前に拒否する。 | SPEC-SUPPLY-002 |
-| REQ-SC-005 | MUST | 通常起動はモデル取得と依存導入を行わない。 | SPEC-SUPPLY-002 |
-| REQ-SC-006 | MUST | モデル由来の Python コードと pickle 重みを拒否する。 | SPEC-SUPPLY-002 |
-| REQ-SC-007 | MUST | npm 外部依存ゼロと同梱コード限定の実行を維持する。 | SPEC-SUPPLY-003 |
-| REQ-SC-008 | MUST | EOL と非推奨技術を採用せず、更新時に公式情報を確認する。 | SPEC-SUPPLY-004 |
-| REQ-SC-009 | MUST | 両翻訳先、認証、queue、cache、保存、手動操作を維持する。 | SPEC-SUPPLY-003 |
-
-ローカルの固定環境は macOS 26+ / arm64 / CPython 3.14 とする。
-現行起動設定の Qwen3.5-9B を固定し、品質比較は追加しない。
-`MODEL` は台帳内の選択に制限し、任意パスを受け付けない。
-Node.js はサポート中の 24 以上の LTS を使用し、基準環境は 24 とする。
-
-採用時の確認は、安全性の完全な証明ではない。
-同一ユーザ権限によるソースと台帳の同時改変は防御範囲外とする。
-検証の実施結果は実装計画に記録する。
-
-2026-10-14、ユーザが動作確認の完了を報告した。
-今回の実 Chrome 受け入れを合格とし、開発を完了する。
-個別操作と異常系の実機試験内訳は未報告である。
-
-## 13. 選択した翻訳先の自動起動 (2026-10-14)
-
-REQ-P-009: MUST — 拡張の読み込みと Chrome プロファイル起動で保存済み翻訳先のサーバだけを起動する。ChatGPT は補助サーバ、local は既存の `scripts/start-server.sh` を使う。
-翻訳先切替では旧 Native 接続を閉じ、新しい選択先を起動する。OFF でも選択先を維持し、拡張無効化・Chrome 完全終了では自分が起動したサーバを停止する。
-ready 後だけ有効化の接続確認と翻訳要求へ進む。失敗を成功扱いせず、無限再起動を行わない。他のサーバを停止・引継ぎしない。
-既存の依存・モデル照合・offline・loopback・CORS・認証・queue・cache・保存の境界を維持する。新しい依存、権限、自動翻訳、モデル取得を追加しない。
-外部動作は SPEC-PROVIDER-006、判断は ADR-012、実施結果は [実装計画](../plans/active/2026-10-14-provider-server-startup.md) を参照する。
-
-2026-10-14、ユーザの実機確認完了報告に基づき、本変更の実 Chrome 受け入れを合格とし、完了した。個別操作と異常系の実機試験内訳は未報告である。
-
-## 14. Node.js 更新後の自動起動 (2026-10-22)
-
-REQ-P-010: MUST — nvm の Node.js 更新後も再登録なしで自動起動する。
-登録時の旧版を削除した場合も、残った対応 LTS で起動する。
-両翻訳先を対象とし、npm のバージョンを起動条件にしない。
-対応する Node.js は、インストール済みの 24 以上の LTS とする。
-対応版がない場合は失敗とし、起動時の自動取得は行わない。
-初回の新方式への移行時だけ登録を更新する。
-nvm 管理外は既存の絶対パスによる起動を維持する。
-REQ-P-009 の起動・停止と既存の通信・認証の境界を維持する。
-
-受け入れ条件は、旧版削除後の起動と LTS 最新版の数値順選択である。
-古い alias、非 LTS の混在、最小 PATH でも同じ条件を満たす。
-Native framing、入力拒否、EOF と signal による停止を維持する。
-外部動作は SPEC-PROVIDER-007、判断は ADR-013 を参照する。
-Node test 112 件は成功した。
-2026-10-22、ユーザの動作確認報告により実 Chrome の受け入れは合格。
-個別操作と実環境の旧版削除による試験内訳は未報告である。
-詳細は [実装計画](../plans/active/2026-10-22-native-host-node-resolution.md) を参照する。
-
-## 15. ポップアップの情報整理 (2026-10-22)
-
-Issue #2 の画面案は、2026-10-22 にユーザが承認した。
-状態: 完了。幅崩れ修正後の実 Chrome 受け入れはユーザ報告で合格。
-MUST は必須を表す。
-
-| ID | レベル | 要求 |
-| --- | --- | --- |
-| REQ-POPUP-001 | MUST | 正式名 `Discord Translator` を画面の見出しに表示する。 |
-| REQ-POPUP-002 | MUST | 翻訳先、ChatGPT 接続、有効化の順に情報を整理する。 |
-| REQ-POPUP-003 | MUST | 手動の接続状態確認ボタンを除く既存の情報と操作を維持し、操作と結果を短い説明で伝える。 |
-| REQ-POPUP-004 | MUST | CSS で装飾し、青紫のアクセントを 3 箇所で使う。 |
-| REQ-POPUP-005 | MUST | 明色・暗色、長い状態文、focus、disabled を判読できる。 |
-
-受け入れ条件は、両翻訳先で手動の接続状態確認ボタンを除く既存の情報と操作を利用できることである。
-名称と有効化案内を揃え、接続状態と固定エラーコードを保持する。
-翻訳先変更時の OFF、接続確認、認証と起動の境界を維持する。
-2026-10-23、ユーザは自動確認と重複する手動の接続状態確認ボタンの削除を承認した。
-ChatGPT 選択時のポップアップ表示と翻訳先切替で接続状態を自動取得し、手動で再取得する場合はポップアップを開き直す。
-自動検証、検証用データでの表示確認、実 Chrome の受け入れを区別する。
-外部動作は SPEC-POPUP-001、検証記録は [実装計画](../plans/active/2026-10-22-popup-layout.md) を参照する。
+現在の動作を定義するための未決事項はない。

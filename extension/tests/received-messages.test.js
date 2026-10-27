@@ -66,7 +66,8 @@ test("one click sends one request and disables the button while pending", async 
 });
 
 test("success keeps the source and renders a Japanese translation directly below it", async () => {
-  const env = await loadContentScript(() => Promise.resolve({ ok: true, text: "こんにちは <b>世界</b>\n改行" }));
+  const text = "こんにちは <b>世界</b>\n改行\n\n[補足]\n- `hello` の説明。";
+  const env = await loadContentScript(() => Promise.resolve({ ok: true, text }));
   const { container, content } = message(env.document, "chat-messages-3-1", "hello");
   env.setEnabled(true);
   ui(container, "button").click();
@@ -76,11 +77,45 @@ test("success keeps the source and renders a Japanese translation directly below
   const [label, body] = translation.children;
   assert.equal(content.textContent, "hello");
   assert.equal(label.className, "discord-translate-translation-label");
-  assert.equal(label.textContent, "日本語訳");
+  assert.equal(label.textContent, "日本語訳・補足");
   assert.equal(body.className, "discord-translate-translation-body");
-  assert.equal(body.textContent, "こんにちは <b>世界</b>\n改行");
+  assert.equal(body.textContent, text);
+  assert.equal(translation.children[2].textContent, "補足は推測を含みます。相手の真意は断定できません。");
+  assert.equal(translation.children[2].hidden, false);
   assert.equal(translation.lang, "ja");
   assert.equal(content.parentNode.children.indexOf(translation), content.parentNode.children.indexOf(content) + 1);
+});
+
+test("notice appears only after a complete notes marker and follows the final result", async () => {
+  const env = await loadContentScript(() => undefined);
+  const { container } = message(env.document, "chat-messages-3-2", "source");
+  env.setEnabled(true);
+  ui(container, "button").click();
+  const port = env.ports[0];
+  port.receive({ type: "progress", text: "訳文" });
+  const notice = ui(container, "translation").children[2];
+  assert.equal(notice.hidden, true);
+  port.receive({ type: "progress", text: "訳文\n\n[補" });
+  assert.equal(notice.hidden, true);
+  port.receive({ type: "progress", text: "訳文\n\n[補足]\n説明" });
+  assert.equal(notice.hidden, false);
+  port.receive({ type: "result", text: "訳文だけ" });
+  assert.equal(notice.hidden, true);
+  assert.equal(ui(container, "translation").children[2], notice);
+});
+
+test("saved results show the notice only when they contain the notes marker", async () => {
+  for (const text of ["訳文だけ", "訳文\n\n[補足]\n説明"]) {
+    const env = await loadContentScript(undefined, { lookup: () => ({ status: "hit", text, error: null }) });
+    const { container } = message(env.document, "chat-messages-3-3", "source");
+    env.setEnabled(true);
+    const translation = ui(container, "translation");
+    assert.equal(translation.children[1].textContent, text);
+    assert.equal(translation.children[2].hidden, !text.includes("[補足]"));
+    assert.equal(env.calls.length, 0);
+    env.setEnabled(false);
+    assert.equal(ui(container, "translation"), undefined);
+  }
 });
 
 test("failure shows a fixed code and retry sends the next request", async () => {
@@ -146,14 +181,14 @@ test("progress updates one body before completion, preserves whitespace and clea
   port.receive({ type: "progress", text: " 訳\n" });
   const translation = ui(container, "translation");
   const body = translation.children[1];
-  assert.equal(translation.children[0].textContent, "日本語訳（翻訳中…）");
+  assert.equal(translation.children[0].textContent, "日本語訳・補足（翻訳中…）");
   assert.equal(translation.children[0].attributes.get("aria-live"), "polite");
   assert.equal(body.textContent, " 訳\n");
   port.receive({ type: "progress", text: " 訳\n続き" });
   assert.equal(ui(container, "translation"), translation);
   assert.equal(translation.children[1], body);
   port.receive({ type: "result", text: " 訳\n続き " });
-  assert.equal(translation.children[0].textContent, "日本語訳");
+  assert.equal(translation.children[0].textContent, "日本語訳・補足");
   assert.equal(body.textContent, "訳\n続き");
   assert.equal(port.closed, true);
   assert.equal(content.textContent, "source");
@@ -180,7 +215,7 @@ test("progress restores a translation block whose body was removed", async () =>
   port.receive({ type: "result", text: "完成訳" });
   const translation = ui(container, "translation");
   assert.equal(container.querySelectorAll('[data-discord-translate="translation"]').length, 1);
-  assert.equal(translation.children[0].textContent, "日本語訳");
+  assert.equal(translation.children[0].textContent, "日本語訳・補足");
   assert.equal(translation.children[1].textContent, "完成訳");
   assert.equal(content.textContent, "source");
   assert.equal(port.closed, true);
@@ -261,7 +296,7 @@ test("saved receive translations restore after navigation, page and worker recre
   first.setEnabled(true);
   await waitFor(() => ui(original.container, "button")?.disabled === false);
   ui(original.container, "button").click();
-  await waitFor(() => ui(original.container, "translation")?.children[0].textContent === "日本語訳");
+  await waitFor(() => ui(original.container, "translation")?.children[0].textContent === "日本語訳・補足");
   assert.equal(ui(original.container, "translation").children[1].textContent, "訳:source");
   assert.equal(firstWorker.calls, 1);
   const deadline = Object.values(storage.data).find((value) => value?.version === 1).expiresAt;
@@ -279,7 +314,10 @@ test("saved receive translations restore after navigation, page and worker recre
   const restored = await loadContentScript(() => { throw new Error("must not translate on restore"); },
     { storage, document: first.document, lookup: (payload) => recreatedWorker.lookup(payload) });
   await waitFor(() => ui(returnView.container, "translation"));
-  assert.equal(ui(returnView.container, "translation").children[0].textContent, "日本語訳");
+  assert.equal(ui(returnView.container, "translation").children[0].textContent, "日本語訳・補足");
+  assert.equal(ui(returnView.container, "translation").children[2].textContent,
+    "補足は推測を含みます。相手の真意は断定できません。");
+  assert.equal(ui(returnView.container, "translation").children[2].hidden, true);
   assert.equal(restored.calls.length, 0);
   assert.equal(recreatedWorker.calls, 0);
   restored.changes[0]({ enabled: { newValue: false } }, "local");

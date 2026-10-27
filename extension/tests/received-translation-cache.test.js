@@ -139,9 +139,9 @@ test("worker saves only completed active receive requests; draft, failed stream 
   let complete;
   const pendingStorage = storageFixture();
   const pending = workerFixture(pendingStorage, { requestImpl: async (_tab, _payload, options) => {
-    options.onChunk({ choices: [{ delta: { content: "途中" } }] });
+    options.onChunk({ choices: [{ delta: { content: "訳\n\n[補" } }] });
     await new Promise((resolve) => { complete = resolve; });
-    options.onChunk({ choices: [{ delta: { content: "訳" }, finish_reason: "stop" }] });
+    options.onChunk({ choices: [{ delta: { content: "足]\n- スラングの説明。" }, finish_reason: "stop" }] });
     options.onChunk({ choices: [], usage: { total_tokens: 1 } });
     return { status: 200 };
   } });
@@ -151,10 +151,11 @@ test("worker saves only completed active receive requests; draft, failed stream 
   assert.deepEqual(pendingStorage.data, {});
   first.port.disconnect();
   complete();
-  assert.equal((await second.result).text, "途中訳");
+  const expected = "訳\n\n[補足]\n- スラングの説明。";
+  assert.equal((await second.result).text, expected);
   assert.equal(pending.calls, 1);
   assert.equal((await pending.lookup(lookupMessage())).status, "miss");
-  assert.equal((await pending.lookup(lookupMessage({ ...source, messageId: "chat-messages-1-3" }))).status, "hit");
+  assert.equal((await pending.lookup(lookupMessage({ ...source, messageId: "chat-messages-1-3" }))).text, expected);
 
   const failureStorage = storageFixture();
   const failed = workerFixture(failureStorage, { requestImpl: async (_tab, _payload, options) => {

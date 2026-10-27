@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { TranslationQueue, sha256Hex } from "../translation-queue.js";
 import { buildPayload } from "../translation-protocol.js";
+import { translationCacheSource } from "../translation-provider.js";
 import { BridgeRegistry } from "../bridge-registry.js";
 import { handleBridgeRequest, validateBridgeRequest } from "../bridge.js";
 import { createReceivedTranslationCache, RECEIVED_CACHE_PREFIX } from "../received-translation-cache.js";
@@ -61,19 +62,39 @@ test("bridge routes ChatGPT only to the fixed helper and maps account/usage erro
   }
 });
 
-test("received cache preserves legacy local keys and never restores another provider's translation", async () => {
+test("received cache skips old prompts for both providers and preserves unexpired legacy entries", async () => {
   const storage = storageFixture();
   const source = { messageId: "chat-messages-1-2", text: "source" };
-  const hash = await sha256Hex(JSON.stringify(["ja", source.text]));
-  const localKey = `${RECEIVED_CACHE_PREFIX}${source.messageId}:${hash}`;
   const cache = createReceivedTranslationCache(storage, { hashImpl: sha256Hex });
+  const legacyKeys = [];
+  for (const provider of ["local", "chatgpt"]) {
+    const hash = await sha256Hex(JSON.stringify(provider === "local" ? ["ja", source.text] : [provider, "ja", source.text]));
+    const key = `${RECEIVED_CACHE_PREFIX}${source.messageId}:${hash}`;
+    legacyKeys.push(key);
+    const savedAt = Date.now();
+    storage.data[key] = { version: 1, text: "旧訳", savedAt, expiresAt: savedAt + 5 * 24 * 60 * 60 * 1000 };
+    assert.equal((await cache.lookup({ ...source, provider })).status, "miss");
+  }
   await cache.save(source, "ローカル訳");
-  assert.equal(storage.data[localKey].text, "ローカル訳");
   assert.equal((await cache.lookup({ ...source, provider: "chatgpt" })).status, "miss");
   await cache.save({ ...source, provider: "chatgpt" }, "ChatGPT訳");
   const recreated = createReceivedTranslationCache(storage, { hashImpl: sha256Hex });
   assert.equal((await recreated.lookup(source)).text, "ローカル訳");
   assert.equal((await recreated.lookup({ ...source, provider: "chatgpt" })).text, "ChatGPT訳");
+  await recreated.cleanup();
+  for (const key of legacyKeys) assert.equal(storage.data[key].text, "旧訳");
+});
+
+test("memory cache skips old Japanese results while English cache keys remain compatible", async () => {
+  const queue = new TranslationQueue({ hashImpl: (value) => value,
+    requestImpl: async (_tab, _payload, options) => responseFor("新訳", options) });
+  for (const provider of ["local", "chatgpt"]) {
+    const oldKey = JSON.stringify(provider === "local" ? ["ja", "source"] : [provider, "ja", "source"]);
+    queue.saveCache(oldKey, "旧訳");
+    assert.equal(await queue.translate("source", 1, { provider }), "訳:新訳");
+    assert.equal(translationCacheSource(provider, "en", "source"),
+      JSON.stringify(provider === "local" ? ["en", "source"] : [provider, "en", "source"]));
+  }
 });
 
 test("worker fixes the provider before queuing and saving, and lookups use the current selection", async () => {

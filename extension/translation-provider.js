@@ -15,5 +15,7 @@ export async function readProvider(storage) {
 
 export function translationCacheSource(provider, language, text) {
   validateProvider(provider);
-  return JSON.stringify(provider === "local" ? [language, text] : [provider, language, text]);
+  const source = provider === "local" ? [language, text] : [provider, language, text];
+  if (language === "ja") source.push("nuance-v1");
+  return JSON.stringify(source);
 }

@@ -75,6 +75,12 @@
   white-space: pre-wrap;
 }
 
+.discord-translate-translation-notice {
+  font-size: 0.9em;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
 .discord-translate-error {
   align-items: center;
   display: flex;

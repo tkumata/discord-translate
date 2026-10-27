@@ -35,6 +35,7 @@ function createReceivedMessages(openRequest) {
     record.ui = null;
     record.translationLabel = null;
     record.translationBody = null;
+    record.translationNotice = null;
   }
 
   function removeContainerUi(container) {
@@ -82,9 +83,11 @@ function createReceivedMessages(openRequest) {
 
   function showTranslation(content, record, translation, pending = false) {
     if (record.ui?.isConnected && record.ui.dataset.discordTranslate === "translation" &&
-        record.translationLabel?.parentNode === record.ui && record.translationBody?.parentNode === record.ui) {
-      record.translationLabel.textContent = pending ? "日本語訳（翻訳中…）" : "日本語訳";
+        record.translationLabel?.parentNode === record.ui && record.translationBody?.parentNode === record.ui &&
+        record.translationNotice?.parentNode === record.ui) {
+      record.translationLabel.textContent = pending ? "日本語訳・補足（翻訳中…）" : "日本語訳・補足";
       record.translationBody.textContent = translation;
+      record.translationNotice.hidden = !translation.includes("[補足]");
       return;
     }
     removeRecordUi(record);
@@ -94,15 +97,20 @@ function createReceivedMessages(openRequest) {
     element.lang = "ja";
     const label = document.createElement("span");
     label.className = "discord-translate-translation-label";
-    label.textContent = pending ? "日本語訳（翻訳中…）" : "日本語訳";
+    label.textContent = pending ? "日本語訳・補足（翻訳中…）" : "日本語訳・補足";
     label.setAttribute("role", "status");
     label.setAttribute("aria-live", "polite");
     const body = document.createElement("div");
     body.className = "discord-translate-translation-body";
     body.textContent = translation;
-    element.append(label, body);
+    const notice = document.createElement("div");
+    notice.className = "discord-translate-translation-notice";
+    notice.textContent = "補足は推測を含みます。相手の真意は断定できません。";
+    notice.hidden = !translation.includes("[補足]");
+    element.append(label, body, notice);
     record.translationLabel = label;
     record.translationBody = body;
+    record.translationNotice = notice;
     content.after(element);
     record.ui = element;
   }
@@ -251,7 +259,7 @@ function createReceivedMessages(openRequest) {
   function createMessageRecord(content, container, text, state) {
     return {
       container, content, messageId: container.id, text, state,
-      ui: null, warning: null, translationLabel: null, translationBody: null, close: null,
+      ui: null, warning: null, translationLabel: null, translationBody: null, translationNotice: null, close: null,
     };
   }
 
